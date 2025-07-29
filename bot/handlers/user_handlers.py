@@ -217,8 +217,17 @@ async def show_rating_menu(callback: CallbackQuery):
     earn_rules_list.append("– " + get_text('rating_menu.earn_tasks.help_others'))
 
     # 5. Referral Bonus (not a one-time task with a checkmark)
-    earn_rules_list.append(
-        "– " + get_text('rating_menu.earn_tasks.referral_bonus', amount=rewards_config.referral_bonus))
+    referral_count = await User.count_referrals(user_id)
+    if referral_count > 0:
+        prefix = "✅ "
+        referral_text = get_text('rating_menu.earn_tasks.referral_bonus_with_count',
+                                 count=referral_count,
+                                 amount=rewards_config.referral_bonus)
+    else:
+        prefix = "– "
+        referral_text = get_text('rating_menu.earn_tasks.referral_bonus',
+                                 amount=rewards_config.referral_bonus)
+    earn_rules_list.append(prefix + referral_text)
 
     earn_rules_text = "\n".join(earn_rules_list)
 
