@@ -116,7 +116,7 @@ class User:
             return await cursor.fetchall()
 
     @staticmethod
-    async def count_refferals(user_id: int) -> int:
+    async def count_referrals(user_id: int) -> int:
         logger.debug(f"Counting referrals for user_id: {user_id}")
         async with aiosqlite.connect("bot_database.db") as db:
             cursor = await db.execute("SELECT COUNT(user_id) FROM users WHERE referrer_id = ?", (user_id,))
