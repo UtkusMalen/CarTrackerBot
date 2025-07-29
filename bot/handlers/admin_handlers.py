@@ -20,6 +20,7 @@ router.callback_query.filter(F.from_user.id.in_(config.admin_ids))
 @router.message(Command("admin"))
 async def show_admin_panel(message: Message, state: FSMContext):
     """Displays the admin panel."""
+    logger.info(f"Admin {message.from_user.id} accessed admin panel.")
     await state.clear()
     await message.answer(
         get_text("admin.panel_header"),
@@ -29,15 +30,16 @@ async def show_admin_panel(message: Message, state: FSMContext):
 @router.callback_query(F.data == "create_mailing")
 async def start_mailing(callback: CallbackQuery, state: FSMContext):
     """Starts the process of creating a new broadcast message."""
+    logger.info(f"Admin {callback.from_user.id} initiated a new mailing.")
     await state.set_state(AdminFSM.get_message)
     msg = await callback.message.edit_text(get_text("admin.mailing_prompt"))
     await state.update_data(prompt_message_id=msg.message_id)
-
     await callback.answer()
 
 @router.message(AdminFSM.get_message)
 async def get_mailing_message(message: Message, state: FSMContext, bot: Bot):
     """Receives the content for the broadcast"""
+    logger.debug(f"Admin {message.from_user.id} provided content for the mailing.")
     data = await state.get_data()
     prompt_message_id = data.get("prompt_message_id")
 
@@ -45,7 +47,7 @@ async def get_mailing_message(message: Message, state: FSMContext, bot: Bot):
         try:
             await bot.delete_message(message.from_user.id, prompt_message_id)
         except TelegramBadRequest:
-            logger.warning("Failed to delete prompt message.")
+            logger.warning(f"Failed to delete prompt message {prompt_message_id} for admin {message.from_user.id}.")
 
     await message.delete()
 
@@ -55,6 +57,7 @@ async def get_mailing_message(message: Message, state: FSMContext, bot: Bot):
     )
     await state.set_state(AdminFSM.confirm_mailing)
 
+    logger.debug(f"Showing mailing preview to admin {message.from_user.id}.")
     await bot.send_message(message.from_user.id, get_text("admin.mailing_preview"))
     if message.photo:
         await bot.send_photo(
@@ -74,6 +77,7 @@ async def get_mailing_message(message: Message, state: FSMContext, bot: Bot):
 @router.callback_query(F.data == "cancel_mailing", AdminFSM.confirm_mailing)
 async def cancel_mailing(callback: CallbackQuery, state: FSMContext):
     """Cancels the broadcast process."""
+    logger.info(f"Admin {callback.from_user.id} cancelled the mailing.")
     await state.clear()
     await callback.message.edit_text(get_text("admin.mailing_cancelled"))
     await show_admin_panel(callback.message, state)
@@ -82,16 +86,18 @@ async def cancel_mailing(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "send_mailing", AdminFSM.confirm_mailing)
 async def send_mailing(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Confirms and starts the broadcast process."""
+    admin_id = callback.from_user.id
+    logger.info(f"Admin {admin_id} confirmed and started the mailing.")
     await callback.message.edit_text(get_text("admin.mailing_started"))
     await callback.answer()
 
     data = await state.get_data()
     text = data.get("text")
     photo_id = data.get("photo_id")
-
     await state.clear()
 
     all_users = await User.get_all_user_ids()
+    logger.info(f"Starting broadcast to {len(all_users)} users.")
     success_count = 0
     fail_count = 0
 
@@ -101,35 +107,39 @@ async def send_mailing(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 await bot.send_photo(user_id, photo=photo_id, caption=text)
             else:
                 await bot.send_message(user_id, text=text)
+            logger.debug(f"Successfully sent broadcast message to user {user_id}.")
             success_count += 1
         except (TelegramForbiddenError, TelegramBadRequest) as e:
             fail_count += 1
-            logger.warning(f"Failed to send message to user {user_id}: {e}")
+            logger.warning(f"Failed to send broadcast message to user {user_id}: {e}")
         except Exception as e:
             fail_count += 1
-            logger.error(f"An error occurred while sending message to user {user_id}: {e}")
-
+            logger.error(f"An unexpected error occurred while sending broadcast to user {user_id}: {e}")
         await asyncio.sleep(0.1)
 
+    result_text = get_text('admin.mailing_finished', success_count=success_count, fail_count=fail_count)
+    logger.success(f"Mailing finished. Success: {success_count}, Failed: {fail_count}.")
     await bot.send_message(
-        chat_id=callback.from_user.id,
-        text=get_text('admin.mailing_finished', success_count=success_count, fail_count=fail_count)
+        chat_id=admin_id,
+        text=result_text
     )
 
 @router.message(Command("test_mileage_reminder"), lambda msg: msg.from_user.id in config.admin_ids)
 async def test_mileage_update_reminder(message: Message, bot: Bot):
     user_id = message.from_user.id
+    logger.info(f"Admin {user_id} initiated a test mileage reminder.")
     active_car = await Car.get_active_car(user_id)
 
     if not active_car:
+        logger.warning(f"Admin {user_id} tried to test reminder, but has no active car.")
         await message.reply("Нет активного автомобиля.")
         return
 
     car_id = active_car[0]
     car_name = active_car[2]
-    await message.reply(f"Отправляю напоминание о пробеге автомобиля для {car_name}.")
+    await message.reply(f"Отправляю тестовое напоминание о пробеге для автомобиля '{car_name}'.")
 
     success = await send_mileage_reminder(bot, user_id, car_name, car_id)
-
     if not success:
-        await message.reply("Произошла ошибка при отправке напоминания.")
+        logger.error(f"Failed to send test mileage reminder to admin {user_id}.")
+        await message.reply("Произошла ошибка при отправке тестового напоминания.")

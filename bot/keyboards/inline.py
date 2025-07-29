@@ -1,6 +1,9 @@
-from typing import Tuple, List
+from typing import Tuple, List, Any, Dict
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+from bot.utils.text_manager import get_text
+
 
 def get_start_keyboard() -> InlineKeyboardMarkup:
     """Returns the initial keyboard for the bot."""
@@ -28,10 +31,19 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="Мои автомобили", callback_data="my_cars")],
         [InlineKeyboardButton(text="Период напоминания", callback_data="change_reminder_period")],
+        [InlineKeyboardButton(text="🏆 Рейтинг", callback_data="rating_menu")],
         [InlineKeyboardButton(text="+ Добавить автомобиль", callback_data="start_registration")],
-        [InlineKeyboardButton(text="История начисления гаек", callback_data="nut_history")],
-        [InlineKeyboardButton(text="Рейтинг пользователей", callback_data="user_rating")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_rating_menu_keyboard() -> InlineKeyboardMarkup:
+    """Returns the keyboard for the rating menu."""
+    buttons = [
+        [InlineKeyboardButton(text="Подробный рейтинг", callback_data="rating_details")],
+        [InlineKeyboardButton(text="История начислений", callback_data="transaction_history")],
+        [InlineKeyboardButton(text="Пригласить друга", callback_data="invite_friend")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="my_profile")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -63,29 +75,53 @@ def get_confirm_keyboard(yes_callback: str, no_callback: str) -> InlineKeyboardM
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def get_notes_keyboard() -> InlineKeyboardMarkup:
-    """Returns the keyboard for the notes menu."""
+def get_notes_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Returns the keyboard for the notes menu with pagination."""
     buttons = [
         [InlineKeyboardButton(text="Добавить запись", callback_data="add_note")],
-        [InlineKeyboardButton(text="Удалить запись", callback_data="delete_note_start")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")],
+        [InlineKeyboardButton(text="Удалить запись", callback_data=f"delete_note_start:{page}")],
     ]
+
+    pagination_buttons = []
+    if page > 1:
+        pagination_buttons.append(
+            InlineKeyboardButton(text="⬅️ Предыдущая", callback_data=f"notes_page:{page - 1}")
+        )
+    if page < total_pages:
+        pagination_buttons.append(
+            InlineKeyboardButton(text="Следующая ➡️", callback_data=f"notes_page:{page + 1}")
+        )
+
+    if pagination_buttons:
+        buttons.append(pagination_buttons)
+
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_delete_notes_keyboard(notes: List[Tuple]) -> InlineKeyboardMarkup:
+def get_delete_notes_keyboard(notes: List[Tuple], page: int) -> InlineKeyboardMarkup:
     """Returns a keyboard to select which note to delete."""
     buttons = []
     for note_id, text, date in notes:
-        # Truncate long text
         display_text = (text[:25] + '...') if len(text) > 25 else text
         buttons.append([InlineKeyboardButton(
             text=f"❌ {date}: {display_text}",
-            callback_data=f"delete_note_confirm:{note_id}"
+            callback_data=f"delete_note_confirm:{note_id}:{page}"
         )])
-    buttons.append([InlineKeyboardButton(text="⬅️ Отмена", callback_data="show_notes")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"show_notes_page:{page}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_delete_car_keyboard(cars: List[Tuple]) -> InlineKeyboardMarkup:
+    """Returns a keyboard to select which car to delete."""
+    buttons = []
+    for car_id, name, mileage in cars:
+        display_text = (name[:25] + "...") if len(name) > 25 else name
+        buttons.append([InlineKeyboardButton(
+            text=f"❌ {display_text}",
+            callback_data=f"delete_car_confirm:{car_id}"
+        )])
+    buttons.append([InlineKeyboardButton(text="⬅️ Отмена", callback_data="my_cars")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_create_reminder_keyboard() -> InlineKeyboardMarkup:
     """Returns the keyboard for creating a new reminder."""
@@ -115,4 +151,65 @@ def get_mailing_confirmation_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_mailing"),
         ]
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_to_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Returns a keyboard with a single 'To Main Menu' button."""
+    buttons = [[InlineKeyboardButton(text="В главное меню", callback_data="main_menu")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_summary_keyboard() -> InlineKeyboardMarkup:
+    """Returns the keyboard for the car summary menu"""
+    buttons = []
+
+    field_labels = get_text('summary.field_labels')
+
+    for field_key, field_label in field_labels.items():
+        buttons.append([InlineKeyboardButton(
+            text=field_label,
+            callback_data=f"edit_summary:{field_key}"
+        )])
+
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_detailed_rating_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Returns the pagination keyboard for the detailed rating view."""
+    buttons = []
+    pagination_buttons = []
+
+    if page > 1:
+        pagination_buttons.append(
+            InlineKeyboardButton(text="⬅️ Предыдущая", callback_data=f"rating_page:{page - 1}")
+        )
+    if page < total_pages:
+        pagination_buttons.append(
+            InlineKeyboardButton(text="Следующая ➡️", callback_data=f"rating_page:{page + 1}")
+        )
+
+    if pagination_buttons:
+        buttons.append(pagination_buttons)
+
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="rating_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_transaction_history_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Returns the pagination keyboard for the transaction history view."""
+    buttons = []
+    pagination_buttons = []
+
+    if page > 1:
+        pagination_buttons.append(
+            InlineKeyboardButton(text="⬅️ Предыдущая", callback_data=f"trans_page:{page - 1}")
+        )
+    if page < total_pages:
+        pagination_buttons.append(
+            InlineKeyboardButton(text="Следующая ➡️", callback_data=f"trans_page:{page + 1}")
+        )
+
+    if pagination_buttons:
+        buttons.append(pagination_buttons)
+
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="rating_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
