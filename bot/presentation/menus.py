@@ -53,10 +53,13 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
                 f"{active_reminders_section}\n\n" \
                 f"{get_text('main_menu.add_reminder_prompt')}"
 
-    top_buttons = [[
-        InlineKeyboardButton(text="Мой профиль", callback_data="my_profile"),
-        InlineKeyboardButton(text="Обновить пробег", callback_data="update_mileage"),
-    ]]
+    top_buttons = [
+        [InlineKeyboardButton(text="Мой авто🚘", callback_data="car_summary")],
+        [
+            InlineKeyboardButton(text="Мой профиль", callback_data="my_profile"),
+            InlineKeyboardButton(text="Обновить пробег", callback_data="update_mileage"),
+        ]
+    ]
     bottom_buttons = [
         [InlineKeyboardButton(text="+ Создать напоминание", callback_data="create_reminder")],
         [InlineKeyboardButton(text="Заметки", callback_data="notes")],

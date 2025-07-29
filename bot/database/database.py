@@ -12,7 +12,8 @@ async def init_db():
                 first_name TEXT,
                 balance_nuts INTEGER DEFAULT 0,
                 active_car_id INTEGER,
-                mileage_reminder_period INTEGER DEFAULT 1
+                mileage_reminder_period INTEGER DEFAULT 1,
+                referrer_id INTEGER
             );
             """
         )
@@ -24,7 +25,19 @@ async def init_db():
                 name TEXT,
                 mileage INTEGER,
                 last_mileage_update_at DATE DEFAULT (date('now')),
-                FOREIGN KEY (user_id) REFERENCES users (user_id)
+                make TEXT,
+                model TEXT,
+                year INTEGER,
+                engine_model TEXT,
+                engine_volume REAL,
+                fuel_type TEXT,
+                power TEXT,
+                transmission TEXT,
+                drive_type TEXT,
+                body_type TEXT,
+                mileage_allowance INTEGER DEFAULT 1000,
+                last_allowance_update_at DATE DEFAULT (date('now')),
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
             );
             """
         )
@@ -48,6 +61,18 @@ async def init_db():
                 interval_km INTEGER NOT NULL,
                 last_reset_mileage INTEGER NOT NULL,
                 FOREIGN KEY (car_id) REFERENCES cars (car_id) ON DELETE CASCADE
+            );
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS transactions (
+                transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                amount INTEGER NOT NULL,
+                description TEXT,
+                created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
             );
             """
         )

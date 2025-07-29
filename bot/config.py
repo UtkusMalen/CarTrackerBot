@@ -1,15 +1,24 @@
 from pathlib import Path
 from typing import List, Optional, Any
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 env_path = Path(__file__).parent.parent / ".env"
+
+class Rewards(BaseModel):
+    referral_bonus: int = 250
+    add_car: int = 100
+    add_reminder: int = 100
+    fill_profile: int = 500
+    mileage_allowance_per_day: int = 1000  # in km
+    km_per_nut: int = 10
 
 class Settings(BaseSettings):
     """Application settings."""
     bot_token: SecretStr
     admin_ids: Optional[List[int]] = None
+    rewards: Rewards = Rewards()
     mileage_update_reminder_days: int = 1
 
     @field_validator("admin_ids", mode="before")
