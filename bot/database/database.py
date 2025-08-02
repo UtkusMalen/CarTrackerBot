@@ -76,5 +76,18 @@ async def init_db():
             );
             """
         )
+        try:
+            await db.execute("ALTER TABLE cars ADD COLUMN insurance_start_date DATE")
+            logger.info("Column 'insurance_start_date' added to 'cars' table.")
+        except aiosqlite.OperationalError as e:
+            if "duplicate column name" not in str(e):
+                raise
+
+        try:
+            await db.execute("ALTER TABLE cars ADD COLUMN insurance_duration_days INTEGER")
+            logger.info("Column 'insurance_duration_days' added to 'cars' table.")
+        except aiosqlite.OperationalError as e:
+            if "duplicate column name" not in str(e):
+                raise
         await db.commit()
     logger.info("Database tables created or already exist.")

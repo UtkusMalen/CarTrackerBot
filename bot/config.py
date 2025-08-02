@@ -14,11 +14,15 @@ class Rewards(BaseModel):
     mileage_allowance_per_day: int = 1000  # in km
     km_per_nut: int = 10
 
+class Costs(BaseModel):
+    add_car_slot: int = 1000
+
 class Settings(BaseSettings):
     """Application settings."""
     bot_token: SecretStr
     admin_ids: Optional[List[int]] = None
     rewards: Rewards = Rewards()
+    costs: Costs = Costs()
     mileage_update_reminder_days: int = 1
 
     @field_validator("admin_ids", mode="before")

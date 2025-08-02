@@ -1,22 +1,24 @@
 import asyncio
 import math
+from datetime import datetime, timedelta
 
 from aiogram import Router, F, Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import Message, CallbackQuery
 from loguru import logger
 
 from bot.config import config
-from bot.database.models import User, Car, Transaction
+from bot.database.models import User, Car, Transaction, Reminder
 from bot.fsm.profile import ProfileFSM
 from bot.handlers import notes_handlers
 from bot.keyboards.inline import get_start_keyboard, get_profile_keyboard, get_back_keyboard, get_delete_car_keyboard, \
-    get_rating_menu_keyboard, get_to_main_menu_keyboard, get_detailed_rating_keyboard, get_transaction_history_keyboard
+    get_to_main_menu_keyboard, get_detailed_rating_keyboard, get_transaction_history_keyboard, \
+    get_garage_keyboard
 from bot.presentation.menus import show_main_menu
-from bot.utils.text_manager import get_text
 from bot.utils.commands import set_user_commands
+from bot.utils.text_manager import get_text
 
 router = Router()
 RATING_PAGE_SIZE = 10
@@ -73,55 +75,141 @@ async def command_start(message: Message, state: FSMContext, bot: Bot, command: 
 
 @router.callback_query(F.data == "my_profile")
 async def show_profile_from_callback(callback: CallbackQuery, state: FSMContext):
-    logger.info(f"User {callback.from_user.id} requested to see profile.")
-    await show_profile(callback, state)
-
-async def show_profile(event: Message | CallbackQuery, state: FSMContext):
     await state.clear()
-    user_id = event.from_user.id
-    user = await User.get_user(user_id)
-    if not user:
+    logger.info(f"User {callback.from_user.id} requested to see profile.")
+    await show_profile(callback.message, user_id=callback.from_user.id, edit=True)
+    await callback.answer()
+
+async def show_profile(message: Message, user_id: int, edit: bool):
+    user_data_task = User.get_user(user_id)
+    user_cars_task = Car.get_all_cars_for_user(user_id)
+    user_rank_task = User.get_user_rank(user_id)
+    total_users_task = User.get_total_users_count()
+
+    user_data, user_cars, user_rank, total_users = await asyncio.gather(
+        user_data_task, user_cars_task, user_rank_task, total_users_task
+    )
+
+    if not user_data:
         logger.error(f"Could not load profile for user {user_id}.")
-        if isinstance(event, CallbackQuery):
-            await event.message.edit_text(get_text('profile.profile_not_loaded'))
-            await event.answer()
+        error_text = get_text('profile.profile_not_loaded')
+        if edit:
+            await message.edit_text(error_text)
         else:
-            await event.answer(get_text('profile.profile_not_loaded'))
+            await message.answer(error_text)
         return
 
-    profile_text = f"{get_text('profile.header')}\n\n{get_text('profile.balance', balance=user[3])}"
-    if isinstance(event, CallbackQuery):
-        await event.message.edit_text(profile_text, reply_markup=get_profile_keyboard())
-        await event.answer()
+    user_balance = user_data[3]
+
+    garage_lines = [get_text('profile.garage_header')]
+    for i, car in enumerate(user_cars):
+        garage_lines.append(get_text('profile.garage_car_line', index=i + 1, name=car[1], mileage=car[2]))
+
+    add_car_text = get_text('profile.garage_add_car_paid', index=len(user_cars) + 1, cost=config.costs.add_car_slot)
+    garage_lines.append(add_car_text)
+
+    garage_section = "\n".join(garage_lines)
+
+    rating_lines = [get_text('profile.rating_header')]
+    rating_lines.append(get_text('profile.rating_rank_line', rank=user_rank, total_users=total_users))
+
+    if user_rank > 1:
+        next_user_balance = await User.get_user_balance_by_rank(user_rank)
+        if next_user_balance is not None:
+            diff = (next_user_balance - user_balance) + 1
+            rating_lines.append(get_text('profile.rating_overtake_line', diff=max(0, diff)))
     else:
-        await event.answer(profile_text, reply_markup=get_profile_keyboard())
+        rating_lines.append(get_text('profile.rating_no_one_above'))
+
+    rating_section = "\n".join(rating_lines)
+
+    referral_section = (
+        f"{get_text('profile.referral_header')}\n"
+        f"{get_text('profile.referral_invite_line', amount=config.rewards.referral_bonus)}"
+    )
+
+    full_text = "\n".join([
+        get_text('profile.header'),
+        get_text('profile.balance', balance=user_balance),
+        garage_section,
+        rating_section,
+        referral_section
+    ])
+
+    keyboard = get_profile_keyboard()
+
+    if edit:
+        try:
+            await message.edit_text(full_text, reply_markup=keyboard)
+        except TelegramBadRequest:
+            await message.answer(full_text, reply_markup=keyboard)
+    else:
+        await message.answer(full_text, reply_markup=keyboard)
 
 
-@router.callback_query(F.data == "my_cars")
-async def show_car_list(callback: CallbackQuery):
+@router.callback_query(F.data == "my_garage")
+async def show_garage(callback: CallbackQuery):
     """Shows the list of user's cars for selection."""
     user_id = callback.from_user.id
     logger.info(f"User {user_id} requested their car list.")
+
     all_cars = await Car.get_all_cars_for_user(user_id)
-    text: str
-    car_buttons = []
 
     if not all_cars:
-        text = get_text('profile.no_cars_yet')
-        car_buttons.append([InlineKeyboardButton(text="+ Добавить автомобиль", callback_data="start_registration")])
-    else:
-        text = get_text('profile.select_active_car')
-        active_car_id = await User.get_active_car_id(user_id)
-        for car_id, name, mileage in all_cars:
-            prefix = "✅ " if car_id == active_car_id else ""
-            car_buttons.append([InlineKeyboardButton(text=f"{prefix}{name}", callback_data=f"select_car:{car_id}")])
-        # Add the new delete button only if there are cars
-        car_buttons.append([InlineKeyboardButton(text="❌ Удалить автомобиль", callback_data="delete_car_start")])
+        text = f"{get_text('profile.garage.header')}\n\n{get_text('profile.garage.no_cars')}"
+        keyboard = get_garage_keyboard(cars=[])
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.answer()
+        return
 
-    car_buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="my_profile")])
-    keyboard = InlineKeyboardMarkup(inline_keyboard=car_buttons)
+    active_car_id = await User.get_active_car_id(user_id)
+    car_text_lines = []
 
-    await callback.message.edit_text(text=text, reply_markup=keyboard)
+    for i, car_row in enumerate(all_cars):
+        reminders_count = len(await Reminder.get_reminders_for_car(car_row['car_id']))
+
+        insurance_start_date_str = car_row['insurance_start_date']
+        insurance_duration_days = car_row['insurance_duration_days']
+
+
+        if insurance_start_date_str and insurance_duration_days:
+            start_date = datetime.strptime(insurance_start_date_str, "%Y-%m-%d").date()
+            end_date = start_date + timedelta(insurance_duration_days)
+            remaining_days = (end_date - datetime.now().date()).days
+
+            if remaining_days > 0:
+                days_value = get_text('insurance.policy_days_left', days=remaining_days)
+                insurance_status = f"{days_value} дней"
+            else:
+                insurance_status = get_text('insurance.policy_expired')
+        else:
+            insurance_status = get_text('insurance.policy_not_set')
+
+        active_indicator = get_text('profile.garage.active_car_indicator') if car_row['car_id'] == active_car_id else ""
+
+        car_text_lines.append(
+            get_text('profile.garage.car_line',
+                     index=i + 1,
+                     name=f"{active_indicator}{car_row['name']}",
+                     mileage=car_row['mileage'],
+                     reminders_count=reminders_count,
+                     insurance_status=insurance_status)
+        )
+
+    car_list_string = "\n".join(car_text_lines)
+    next_item_index = len(all_cars) + 1
+
+    add_car_prompt = get_text('profile.garage.add_another_car_prompt', index=next_item_index, cost=config.costs.add_car_slot)
+
+    full_text = (
+        f"{get_text('profile.garage.header')}\n\n"
+        f"{car_list_string}\n"
+        f"{add_car_prompt}"
+    )
+
+    keyboard = get_garage_keyboard(all_cars)
+
+    await callback.message.edit_text(text=full_text, reply_markup=keyboard)
     await callback.answer()
 
 @router.callback_query(F.data.startswith("select_car:"))
@@ -132,19 +220,21 @@ async def select_car(callback: CallbackQuery, state: FSMContext):
     logger.info(f"User {user_id} selected car {car_id} as active.")
     await User.set_active_car(user_id, car_id)
     await show_main_menu(callback.message, user_id, edit=True)
-    await callback.answer(get_text('profile.active_car_changed'))
+    await callback.answer(get_text('profile.active_changed'))
 
 @router.callback_query(F.data == "delete_car_start")
 async def delete_car_start(callback: CallbackQuery):
     user_id = callback.from_user.id
     logger.info(f"User {user_id} initiated car deletion process.")
+
     all_cars = await Car.get_all_cars_for_user(user_id)
+
     if not all_cars:
         await callback.answer("У вас нет автомобилей для удаления.", show_alert=True)
         return
 
     await callback.message.edit_text(
-        "Какой автомобиль вы хотите удалить? \n\n⚠️ **Внимание:** Это действие необратимо и удалит все связанные с автомобилем данные (напоминания, заметки).",
+        "Какой автомобиль вы хотите удалить? \n\n⚠️ <b>Внимание:</b> Это действие необратимо и удалит все связанные с автомобилем данные (напоминания, заметки).",
         reply_markup=get_delete_car_keyboard(all_cars)
     )
     await callback.answer()
@@ -159,7 +249,7 @@ async def delete_car_process(callback: CallbackQuery):
     await callback.answer("Автомобиль успешно удален.", show_alert=True)
 
     # After deleting, refresh the car list view
-    await show_car_list(callback)
+    await show_garage(callback)
 
 @router.callback_query(F.data == "main_menu")
 async def back_to_main_menu(callback: CallbackQuery, state: FSMContext):
@@ -176,85 +266,6 @@ async def back_to_main_menu(callback: CallbackQuery, state: FSMContext):
             reply_markup=get_start_keyboard()
         )
     await callback.answer(get_text('general.action_canceled'))
-
-@router.callback_query(F.data == "rating_menu")
-async def show_rating_menu(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    logger.info(f"User {user_id} requested rating menu.")
-
-    user_data = await User.get_user(user_id)
-    if not user_data:
-        await callback.answer("Не удалось загрузить профиль.", show_alert=True)
-        return
-
-    balance = user_data[3]
-    rank = await User.get_user_rank(user_id)
-    total_users = await User.get_total_users_count()
-    transactions = await Transaction.get_latest_transactions(user_id, limit=3)
-
-    completed_tasks = await Transaction.get_all_reward_descriptions(user_id)
-
-    rewards_config = config.rewards
-    earn_rules_list = []
-
-    ADD_REMINDER_DESC = "Создание напоминания"
-    ADD_CAR_DESC = "Добавление авто"
-    FILL_PROFILE_DESC = "Заполнение профиля авто"
-
-    # 1. Add Reminder
-    prefix = "✅ " if ADD_REMINDER_DESC in completed_tasks else "– "
-    earn_rules_list.append(prefix + get_text('rating_menu.earn_tasks.add_reminder', amount=rewards_config.add_reminder))
-
-    # 2. Fill Profile
-    prefix = "✅ " if FILL_PROFILE_DESC in completed_tasks else "– "
-    earn_rules_list.append(prefix + get_text('rating_menu.earn_tasks.fill_profile', amount=rewards_config.fill_profile))
-
-    # 3. Add Car
-    prefix = "✅ " if ADD_CAR_DESC in completed_tasks else "– "
-    earn_rules_list.append(prefix + get_text('rating_menu.earn_tasks.add_car', amount=rewards_config.add_car))
-
-    # 4. Help Others (not a one-time task with a checkmark)
-    earn_rules_list.append("– " + get_text('rating_menu.earn_tasks.help_others'))
-
-    # 5. Referral Bonus (not a one-time task with a checkmark)
-    referral_count = await User.count_referrals(user_id)
-    if referral_count > 0:
-        prefix = "✅ "
-        referral_text = get_text('rating_menu.earn_tasks.referral_bonus_with_count',
-                                 count=referral_count,
-                                 amount=rewards_config.referral_bonus)
-    else:
-        prefix = "– "
-        referral_text = get_text('rating_menu.earn_tasks.referral_bonus',
-                                 amount=rewards_config.referral_bonus)
-    earn_rules_list.append(prefix + referral_text)
-
-    earn_rules_text = "\n".join(earn_rules_list)
-
-    history_text = "\n".join(
-        [get_text('rating_menu.transaction_line', description=desc, amount=amt) for amt, desc in transactions]
-    ) if transactions else get_text('rating_menu.no_history')
-
-    stats_text = get_text('rating_menu.stats', balance=balance, rank=rank, total_users=total_users)
-    stats_text = stats_text.replace("🔩", "🔩").replace("🏆", "🏆").replace("🚘", "🚘")
-
-    full_text = (
-        f"<b>{get_text('rating_menu.header')}</b>\n\n"
-        f"{stats_text}\n\n"
-        f"<b>{get_text('rating_menu.history_header')}</b>\n"
-        f"{history_text}\n\n"
-        f"<b>{get_text('rating_menu.earn_header')}</b>\n"
-        f"{earn_rules_text}\n\n"
-        f"<b>{get_text('rating_menu.spend_header')}</b>\n"
-        f"{get_text('rating_menu.spend_rules')}"
-    )
-
-    await callback.message.edit_text(
-        full_text,
-        reply_markup=get_rating_menu_keyboard(),
-        disable_web_page_preview=True
-    )
-    await callback.answer()
 
 async def _display_detailed_rating_page(callback: CallbackQuery, page: int):
     logger.info(f"User {callback.from_user.id} is viewing detailed rating page {page}.")
@@ -319,7 +330,7 @@ async def invite_friend(callback: CallbackQuery, bot: Bot):
 
     await callback.message.edit_text(
         text,
-        reply_markup=get_back_keyboard("rating_menu")
+        reply_markup=get_back_keyboard("my_profile")
     )
     await callback.answer()
 
@@ -378,7 +389,7 @@ async def process_reminder_period_update(message: Message, state: FSMContext, bo
             logger.error(f"Failed to edit message into profile menu for {user_id}: {e}")
             await message.answer(profile_text, reply_markup=get_profile_keyboard())
     else:
-        await show_profile(message, state)
+        await show_profile(message, user_id, edit=False)
 
     await asyncio.sleep(5)
     try:
@@ -409,11 +420,19 @@ async def _display_transaction_history_page(callback: CallbackQuery, page: int):
 
     transaction_lines = []
     for amount, description, created_at in transactions:
-        # Format the date nicely (e.g., YYYY-MM-DD)
         date_str = created_at.split(" ")[0]
+
+        if amount > 0:
+            formatted_amount = f"+{amount}"
+        else:
+            formatted_amount = str(amount)
         transaction_lines.append(
-            get_text('rating_menu.transaction_history.transaction_line', date=date_str, description=description,
-                     amount=amount)
+            get_text(
+                'rating_menu.transaction_history.transaction_line',
+                date=date_str,
+                description=description,
+                amount=formatted_amount
+            )
         )
 
     page_footer = get_text('rating_menu.transaction_history.page_footer', page=page, total_pages=total_pages)

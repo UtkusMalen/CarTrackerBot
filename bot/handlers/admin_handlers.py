@@ -1,14 +1,14 @@
 import asyncio
 from loguru import logger
 from aiogram import Router, Bot, F
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from bot.config import config
 from bot.fsm.admin import AdminFSM
-from bot.database.models import User, Car
+from bot.database.models import User, Car, Transaction
 from bot.keyboards.inline import get_admin_panel_keyboard, get_mailing_confirmation_keyboard
 from bot.utils.notifications import send_mileage_reminder
 from bot.utils.text_manager import get_text
@@ -26,6 +26,7 @@ async def show_admin_panel(message: Message, state: FSMContext):
         get_text("admin.panel_header"),
         reply_markup=get_admin_panel_keyboard()
     )
+
 
 @router.callback_query(F.data == "create_mailing")
 async def start_mailing(callback: CallbackQuery, state: FSMContext):
@@ -123,6 +124,51 @@ async def send_mailing(callback: CallbackQuery, state: FSMContext, bot: Bot):
         chat_id=admin_id,
         text=result_text
     )
+
+@router.message(Command("addnuts"))
+async def add_nuts_command(message: Message, command: CommandObject, bot: Bot):
+    admin_id = message.from_user.id
+
+    if not command.args:
+        await message.answer(get_text("admin.addnuts.usage"))
+        return
+
+    try:
+        parts = command.args.split()
+        if len(parts) != 2:
+            raise ValueError("Incorrect number of arguments.")
+
+        user_id_str, amount_str = parts
+        user_id = int(user_id_str)
+        amount = int(amount_str)
+
+        if amount <= 0:
+            await message.answer(get_text('admin.addnuts.invalid_amount'))
+            return
+
+    except (ValueError, TypeError):
+        await message.answer(get_text("admin.addnuts.usage"))
+        return
+
+    target_user = await User.get_user(user_id)
+    if not target_user:
+        await message.answer(get_text("admin.addnuts.user_not_found", user_id=user_id))
+        return
+
+    description = "Начисление от администратора"
+    await Transaction.add_transaction(user_id, amount, description)
+    logger.success(f"Admin {admin_id} added {amount} nuts to user {user_id}")
+
+    await message.answer(get_text("admin.addnuts.success", user_id=user_id, amount=amount))
+
+    try:
+        await bot.send_message(user_id, get_text('admin.addnuts.user_notification', amount=amount))
+        logger.info(f"Successfully notified user {user_id} about receiving nuts.")
+    except (TelegramForbiddenError, TelegramBadRequest):
+        logger.warning(f"Could not notify user {user_id}. The bot might be blocked.")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while notifying user {user_id}: {e}")
+
 
 @router.message(Command("test_mileage_reminder"), lambda msg: msg.from_user.id in config.admin_ids)
 async def test_mileage_update_reminder(message: Message, bot: Bot):

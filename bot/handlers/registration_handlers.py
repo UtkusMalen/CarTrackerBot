@@ -19,11 +19,29 @@ router = Router()
 async def start_registration(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     logger.info(f"User {user_id} started registration process.")
-    await User.create_user(user_id, callback.from_user.username, callback.from_user.first_name)
-    await state.set_state(RegistrationFSM.car_name)
 
-    active_car = await Car.get_active_car(user_id)
-    back_callback_data = "my_profile" if active_car else "main_menu"
+    await User.create_user(user_id, callback.from_user.username, callback.from_user.first_name)
+
+    user_cars = await Car.get_all_cars_for_user(user_id)
+    car_cost = 0
+
+    if user_cars:
+        car_cost = config.costs.add_car_slot
+        user_data = await User.get_user(user_id)
+        user_balance = user_data[3] if user_data else 0
+
+        if user_balance < car_cost:
+            logger.warning(f"User {user_id} has insufficient balance to add a car.")
+            await callback.answer(
+                get_text('profile.errors.insufficient_funds', cost=car_cost, balance=user_balance),
+                show_alert=True
+            )
+            return
+
+    await state.set_state(RegistrationFSM.car_name)
+    await state.update_data(car_cost=car_cost)
+
+    back_callback_data = "my_profile" if user_cars else "main_menu"
 
     try:
         msg = await callback.message.edit_text(
@@ -120,15 +138,23 @@ async def process_last_oil_change(message: Message, state: FSMContext, bot: Bot)
 async def _finish_registration(user_id: int, state: FSMContext):
     logger.info(f"Finishing registration for user {user_id}.")
     data = await state.get_data()
+
     car_id = await Car.add_car(
         user_id,
         data['car_name'],
         data['car_mileage']
     )
+
     await User.set_active_car(user_id, car_id)
+
     await Reminder.add_reminder(
         car_id, "Замена масла", data['oil_change_interval'], data['last_oil_change']
     )
+
+    car_cost = data.get("car_cost", 0)
+    if car_cost > 0:
+        await Transaction.add_transaction(user_id, -car_cost, "Покупка слота для авто")
+        logger.success(f"Charged {user_id} {car_cost} nuts for a new car slot")
 
     description = "Добавление авто"
     if not await Transaction.has_received_reward(user_id, description):

@@ -45,6 +45,26 @@ class User:
             return row[0] if row else 0
 
     @staticmethod
+    async def get_user_balance_by_rank(rank: int) -> Optional[int]:
+        """Fetches the balance of a user by their rank."""
+        if rank <= 1:
+            return None
+
+        offset = rank - 2
+        logger.debug(f"Fetching balance for user at rank {rank - 1} (offset {offset})")
+        async with aiosqlite.connect("bot_database.db") as db:
+            cursor = await db.execute(
+                """
+                SELECT balance_nuts FROM users
+                ORDER BY balance_nuts DESC, user_id ASC
+                LIMIT 1 OFFSET ?
+                """,
+                (offset,)
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+    @staticmethod
     async def get_total_users_count() -> int:
         """Counts the total number of registered users."""
         logger.debug("Counting total users")
@@ -143,6 +163,7 @@ class Car:
     async def get_active_car(user_id: int) -> Optional[tuple]:
         logger.debug(f"Fetching active car for user_id: {user_id}")
         async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT active_car_id FROM users WHERE user_id = ?", (user_id,))
             active_id_row = await cursor.fetchone()
             active_id = active_id_row[0] if active_id_row else None
@@ -162,10 +183,12 @@ class Car:
             return None
 
     @staticmethod
-    async def get_all_cars_for_user(user_id: int) -> list[Tuple]:
+    async def get_all_cars_for_user(user_id: int) -> list:
         logger.debug(f"Fetching all cars for user_id: {user_id}")
         async with aiosqlite.connect("bot_database.db") as db:
-            cursor = await db.execute("SELECT car_id, name, mileage FROM cars WHERE user_id = ? ORDER BY car_id", (user_id,))
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM cars WHERE user_id = ? ORDER BY car_id",
+            (user_id,))
             return await cursor.fetchall()
 
     @staticmethod
@@ -274,6 +297,16 @@ class Car:
             await db.execute(query, tuple(values))
             await db.commit()
 
+    @staticmethod
+    async def update_insurance(car_id: int, start_date: str, duration_days: int) -> None:
+        async with aiosqlite.connect("bot_database.db") as db:
+            await db.execute(
+                "UPDATE cars SET insurance_start_date = ?, insurance_duration_days = ? WHERE car_id = ?",
+                (start_date, duration_days, car_id)
+            )
+            await db.commit()
+            logger.info(f"Updated insurance for car_id {car_id}.")
+
 
 class Note:
     @staticmethod
@@ -365,20 +398,21 @@ class Transaction:
     @staticmethod
     async def add_transaction(user_id: int, amount: int, description: str) -> None:
         """Adds a transaction and updates the user's balance."""
-        if amount <= 0:
+        if amount == 0:
             return
 
-        logger.info(f"Adding transaction for user {user_id}: {amount} nuts for '{description}'")
+        log_verb = "Spending" if amount < 0 else "Adding"
+        logger.info(f"{log_verb} transaction for user {user_id}: {amount} nuts for '{description}'")
         async with aiosqlite.connect("bot_database.db") as db:
-            await db.execute(
-                "INSERT INTO transactions (user_id, amount, description) VALUES (?, ?, ?)",
-                (user_id, amount, description)
-            )
-            await db.execute(
-                "UPDATE users SET balance_nuts = balance_nuts + ? WHERE user_id = ?",
-                (amount, user_id)
-            )
-
+            async with db.execute("BEGIN"):
+                await db.execute(
+                    "INSERT INTO transactions (user_id, amount, description) VALUES (?, ?, ?)",
+                    (user_id, amount, description)
+                )
+                await db.execute(
+                    "UPDATE users SET balance_nuts = balance_nuts + ? WHERE user_id = ?",
+                    (amount, user_id)
+                )
             await db.commit()
 
     @staticmethod

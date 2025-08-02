@@ -18,6 +18,7 @@ async def set_user_commands(bot: Bot, user_id: int):
         # If they are an admin, add the admin-specific command
         commands_to_set = default_commands + [
             BotCommand(command="admin", description="Панель администратора"),
+            BotCommand(command="addnuts", description="Начислить гайки пользователю"),
         ]
 
     # Use BotCommandScopeChat to apply the commands only to the specific user's chat
