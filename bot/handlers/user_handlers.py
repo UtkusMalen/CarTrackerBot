@@ -103,7 +103,7 @@ async def show_profile(message: Message, user_id: int, edit: bool):
 
     garage_lines = [get_text('profile.garage_header')]
     for i, car in enumerate(user_cars):
-        garage_lines.append(get_text('profile.garage_car_line', index=i + 1, name=car[1], mileage=car[2]))
+        garage_lines.append(get_text('profile.garage_car_line', index=i + 1, name=car[2], mileage=car[3]))
 
     add_car_text = get_text('profile.garage_add_car_paid', index=len(user_cars) + 1, cost=config.costs.add_car_slot)
     garage_lines.append(add_car_text)
