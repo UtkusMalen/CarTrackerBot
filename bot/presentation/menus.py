@@ -34,7 +34,15 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
             progress_percentage = max(0, min(1, progress_percentage))
 
             progress = int(progress_percentage * 10)
-            rem_progress_bar = "🟩" * progress + "─" * (10 - progress)
+
+            if progress_percentage >= 0.8:
+                bar_emoji = '🟥'
+            elif progress_percentage >= 0.5:
+                bar_emoji = '🟨'
+            else:
+                bar_emoji = '🟩'
+
+            rem_progress_bar = bar_emoji * progress + "─" * (10 - progress)
 
             reminders_text_parts.append(
                 get_text('main_menu.reminder_line').format(
@@ -63,7 +71,15 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
         if remaining_days > 0:
             progress_percentage = (insurance_duration_days - remaining_days) / insurance_duration_days
             progress = int(progress_percentage * 10)
-            progress_bar = "🟩" * progress + "─" * (10 - progress)
+
+            if progress_percentage >= 0.8:
+                bar_emoji = '🟥'
+            elif progress_percentage >= 0.5:
+                bar_emoji = '🟨'
+            else:
+                bar_emoji = '🟩'
+
+            progress_bar = bar_emoji * progress + "─" * (10 - progress)
 
             insurance_section_text = get_text(
                 'main_menu.insurance_line',
