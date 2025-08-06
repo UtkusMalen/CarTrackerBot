@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta, datetime
 
 from aiogram import Router, F, Bot
@@ -20,8 +21,8 @@ from bot.keyboards.inline import (
     get_time_tracking_edit_keyboard,
     get_reset_mileage_tracking_keyboard,
     get_reset_time_tracking_keyboard,
-    get_reminder_type_keyboard, get_use_current_mileage_keyboard, get_use_current_date_keyboard,
-    get_notification_config_keyboard, get_exact_mileage_edit_keyboard
+    get_reminder_type_keyboard, get_use_current_mileage_keyboard, get_notification_config_keyboard,
+    get_exact_mileage_edit_keyboard, get_use_current_date_for_start_keyboard
 )
 from bot.presentation.menus import show_main_menu
 from bot.utils.text_manager import get_text
@@ -260,7 +261,6 @@ async def process_reminder_type(callback: CallbackQuery, state: FSMContext):
     elif reminder_type == "time":
         prompt_text = get_text('reminders_flow.prompt_time_target', name=reminder_name)
         next_state = ReminderFSM.get_time_target_date
-        keyboard = get_use_current_date_keyboard("create_reminder")
 
     await state.set_state(next_state)
     await callback.message.edit_text(prompt_text, reply_markup=keyboard)
@@ -284,6 +284,8 @@ async def _finish_reminder_creation(state: FSMContext, user_id: int, message: Me
         interval_km=data.get('interval_km'),
         last_reset_mileage=data.get('last_reset_mileage'),
         target_mileage=data.get('target_mileage'),
+        interval_days=data.get('interval_days'),
+        last_reset_date=data.get('last_reset_date'),
         target_date=data.get('target_date')
     )
 
@@ -358,29 +360,102 @@ async def process_exact_mileage_target(message: Message, state: FSMContext, bot:
 
 
 @router.message(ReminderFSM.get_time_target_date)
-async def process_time_target_date(message: Message, state: FSMContext, bot: Bot):
+async def process_time_end_date(message: Message, state: FSMContext, bot: Bot):
+    """
+    Step 1 for time reminders: Processes the END date and transitions to ask for the START date.
+    """
     try:
-        date_obj = datetime.strptime(message.text, "%d.%m.%Y")
-        date_str = date_obj.strftime("%Y-%m-%d")
-        await state.update_data(target_date=date_str)
-        await _finish_reminder_creation(state, message.from_user.id, message, bot)
+        end_date = datetime.strptime(message.text, "%d.%m.%Y").date()
+        if end_date <= datetime.now().date():
+            await message.reply("Дата окончания должна быть в будущем.")
+            return
+
+        await state.update_data(end_date=end_date)
+        await state.set_state(ReminderFSM.get_time_start_date)
+
+        data = await state.get_data()
+        prompt_message_id = data.get("prompt_message_id")
+        reminder_name = data.get("name", "")
+
+        prompt_text = get_text('reminders_flow.prompt_start_date_generic', name=reminder_name)
+        # We need a back button to the previous step, which was choosing the type
+        keyboard = get_use_current_date_for_start_keyboard("create_reminder")
+
+        await message.delete()
+        if prompt_message_id:
+            await bot.edit_message_text(
+                prompt_text,
+                chat_id=message.chat.id,
+                message_id=prompt_message_id,
+                reply_markup=keyboard
+            )
+    except ValueError:
+        await message.reply(get_text('errors.invalid_date_format'))
+        return
+
+
+# ADD THIS NEW HANDLER for text input of the start date
+@router.message(ReminderFSM.get_time_start_date)
+async def process_time_start_date(message: Message, state: FSMContext, bot: Bot):
+    """
+    Step 2 for time reminders: Processes the START date (from text) and finishes creation.
+    """
+    try:
+        start_date = datetime.strptime(message.text, "%d.%m.%Y").date()
+        await state.update_data(start_date=start_date)
+        await _calculate_and_finish_time_reminder(state, message.from_user.id, message, bot)
         await message.delete()
     except ValueError:
         await message.reply(get_text('errors.invalid_date_format'))
         return
 
 
+# ADD THIS NEW HANDLER for the "Use current date" button click
+@router.callback_query(F.data == "use_current_date_for_start", ReminderFSM.get_time_start_date)
+async def process_use_current_date_for_start(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """
+    Step 2 for time reminders: Processes the START date (from button) and finishes creation.
+    """
+    start_date = datetime.now().date()
+    await state.update_data(start_date=start_date)
+    await _calculate_and_finish_time_reminder(state, callback.from_user.id, callback.message, bot)
+
+
+# ADD THIS NEW HELPER function to calculate the interval
+async def _calculate_and_finish_time_reminder(state: FSMContext, user_id: int, message: Message, bot: Bot):
+    """
+    Calculates the interval in days from the start and end dates and calls the final creation function.
+    """
+    data = await state.get_data()
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+
+    if not start_date or not end_date:
+        logger.error("State is missing start_date or end_date in time reminder creation.")
+        await state.clear()
+        return
+
+    if start_date >= end_date:
+        # This check is now inside the handlers, but we keep it here as a safeguard
+        await message.answer("Дата начала должна быть раньше даты окончания. Попробуйте снова.")
+        # Re-prompt for the start date
+        await state.set_state(ReminderFSM.get_time_start_date)
+        return
+
+    interval_days = (end_date - start_date).days
+    await state.update_data(
+        interval_days=interval_days,
+        last_reset_date=start_date.strftime("%Y-%m-%d"),
+        target_date=end_date.strftime("%Y-%m-%d") # Also save the target date for potential future use
+    )
+
+    await _finish_reminder_creation(state, user_id, message, bot)
+
+
 @router.callback_query(F.data.startswith("use_current_mileage:"))
 async def process_use_current_mileage(callback: CallbackQuery, state: FSMContext, bot: Bot):
     mileage = int(callback.data.split(":")[1])
     await state.update_data(last_reset_mileage=mileage)
-    await _finish_reminder_creation(state, callback.from_user.id, callback.message, bot)
-
-
-@router.callback_query(F.data.startswith("use_current_date:"))
-async def process_use_current_date(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    await state.update_data(target_date=date_str)
     await _finish_reminder_creation(state, callback.from_user.id, callback.message, bot)
 
 
@@ -648,7 +723,7 @@ async def delete_reminder_confirm(callback: CallbackQuery):
     reminder_id = int(callback.data.split(":")[1])
     logger.info(f"User {user_id} is deleting reminder {reminder_id}.")
     await Reminder.delete_reminder(reminder_id)
-    await show_main_menu(callback.message, user_id, edit=True)
+    await show_tracking_list_menu(callback)
     await callback.answer(get_text('reminders.deleted_success'), show_alert=True)
 
 @router.callback_query(F.data.startswith("edit_reminder_target_mileage:"))
@@ -668,3 +743,84 @@ async def process_edit_target_mileage(message: Message, state: FSMContext, bot: 
         await message.reply(get_text('errors.must_be_digit'))
         return
     await _process_fsm_edit(message, state, bot, {"target_mileage": int(message.text)})
+
+@router.callback_query(F.data.startswith("time_notify_stop:"))
+async def process_time_notify_stop(callback: CallbackQuery):
+    """
+    Handles the 'Не напоминать' button by clearing the notification schedule.
+    """
+    reminder_id = int(callback.data.split(":")[1])
+    logger.info(f"User {callback.from_user.id} chose to stop notifications for reminder {reminder_id}.")
+    await Reminder.update_reminder_details(reminder_id, {"notification_schedule": ""})
+    edited_message = await callback.message.edit_text("Хорошо, больше не буду напоминать об этом событии.", reply_markup=None)
+    await callback.answer()
+
+    await asyncio.sleep(5)
+    try:
+        await edited_message.delete()
+    except TelegramBadRequest:
+        logger.warning(f"Could not delete temporary confirmation message for user {callback.from_user.id}.")
+
+
+@router.callback_query(F.data.startswith("time_notify_ack:"))
+async def process_time_notify_ack(callback: CallbackQuery):
+    """
+    Handles the 'Спасибо!' button by acknowledging the current notification.
+    """
+    _, reminder_id_str, day_to_remove_str = callback.data.split(":")
+    reminder_id = int(reminder_id_str)
+    day_to_remove = int(day_to_remove_str)
+    logger.info(f"User {callback.from_user.id} acknowledged notification for reminder {reminder_id} ({day_to_remove} days).")
+
+    reminder = await Reminder.get_reminder(reminder_id)
+    if not reminder or not reminder['notification_schedule']:
+        edited_message = await callback.message.edit_text("Это напоминание уже неактуально.", reply_markup=None)
+        await callback.answer()
+    else:
+        schedule_list = reminder['notification_schedule'].split(',')
+        if str(day_to_remove) in schedule_list:
+            schedule_list.remove(str(day_to_remove))
+
+        new_schedule = ",".join(schedule_list)
+        await Reminder.update_reminder_details(reminder_id, {"notification_schedule": new_schedule})
+
+        edited_message = await callback.message.edit_text("Понял, спасибо! Напомню в следующий раз.", reply_markup=None)
+        await callback.answer()
+
+    await asyncio.sleep(5)
+    try:
+        await edited_message.delete()
+    except TelegramBadRequest:
+        logger.warning(f"Could not delete temporary confirmation message for user {callback.from_user.id}.")
+
+
+@router.callback_query(F.data.startswith("restart_reminder:"))
+async def restart_reminder_from_main_menu(callback: CallbackQuery, bot: Bot):
+    """
+    Handles the 'Запустить заново' button from the main menu for an expired reminder.
+    """
+    reminder_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+    logger.info(f"User {user_id} restarting reminder {reminder_id} from main menu.")
+
+    reminder = await Reminder.get_reminder(reminder_id)
+    if not reminder:
+        await callback.answer(get_text('reminders.not_found'), show_alert=True)
+        return
+
+    if reminder['type'] in ('mileage_interval', 'exact_mileage'):
+        car = await Car.get_active_car(user_id)
+        if car and car['mileage'] is not None:
+            await Reminder.reset_mileage_reminder(reminder_id, car['mileage'])
+            await callback.answer("Отсчёт по пробегу сброшен!", show_alert=False)
+        else:
+            await callback.answer(get_text('errors.mileage_not_set_error'), show_alert=True)
+            return
+
+    elif reminder['type'] == 'time':
+        current_date_str = datetime.now().strftime("%Y-%m-%d")
+        await Reminder.reset_time_reminder(reminder_id, current_date_str)
+        await callback.answer("Отсчёт по времени запущен заново!", show_alert=False)
+
+    # Refresh the main menu to show the updated state
+    await show_main_menu(callback.message, user_id, edit=True)

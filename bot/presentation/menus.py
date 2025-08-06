@@ -43,6 +43,7 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
     # --- Build Reminders/Trackings Text ---
     reminders_text_parts = []
     unconfigured_reminder_names = []
+    expired_reminders_for_restart = []  # <-- This list will hold reminders needing a restart button.
 
     for rem in reminders:
         rem_type = rem['type']
@@ -59,6 +60,7 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
                 progress = int(progress_percentage * 10)
 
                 if rem_remaining <= 0:
+                    expired_reminders_for_restart.append(rem)  # <-- Add expired mileage reminder
                     rem_progress_bar = '🟥' * 10
                     reminders_text_parts.append(
                         get_text('main_menu.reminder_line_due_full_bar').format(
@@ -86,7 +88,7 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
                 progress = int(progress_percentage * 10)
 
                 if rem_remaining <= 0:
-                    # Logic for when target is reached
+                    expired_reminders_for_restart.append(rem)  # <-- Add expired exact mileage reminder
                     rem_progress_bar = '🟥' * 10
                     reminders_text_parts.append(
                         get_text('main_menu.reminder_line_due_full_bar').format(
@@ -94,7 +96,6 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
                         ).replace('\\n', '\n')
                     )
                 else:
-                    # Logic for progress
                     bar_emoji = '🟥' if progress_percentage >= 0.8 else '🟨' if progress_percentage >= 0.5 else '🟩'
                     rem_progress_bar = bar_emoji * progress + "─" * (10 - progress)
                     reminders_text_parts.append(
@@ -110,17 +111,29 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
         # --- Time-based (Old and New) ---
         elif rem_type == 'time':
             if is_configured:
+                end_date = None
                 # Handle new target_date format
                 if rem['target_date']:
                     end_date = datetime.strptime(rem['target_date'], '%Y-%m-%d').date()
-                    # Cannot calculate progress without a start date, so show remaining days and an empty bar.
+                # Handle old interval_days format
+                elif rem['interval_days'] and rem['last_reset_date']:
+                    start_date = datetime.strptime(rem['last_reset_date'], '%Y-%m-%d').date()
+                    end_date = start_date + timedelta(days=rem['interval_days'])
+
+                if end_date:
+                    remaining_days = (end_date - datetime.now().date()).days
+                    if remaining_days <= 0 and not rem.get('is_repeating', False):
+                        expired_reminders_for_restart.append(rem)  # <-- Add expired, non-repeating time reminder
+
+                # The rest of the display logic remains the same
+                if rem['target_date']:
+                    end_date = datetime.strptime(rem['target_date'], '%Y-%m-%d').date()
                     remaining_days = (end_date - datetime.now().date()).days
                     progress_bar = "─" * 10
                     reminders_text_parts.append(get_text(
                         'main_menu.insurance_line', name=rem['name'], remaining_days=max(0, remaining_days),
                         progress_bar=progress_bar, progress_percent=0
                     ).replace('\\n', '\n'))
-                # Handle old interval_days format
                 elif rem['interval_days'] and rem['last_reset_date']:
                     start_date = datetime.strptime(rem['last_reset_date'], '%Y-%m-%d').date()
                     end_date = start_date + timedelta(days=rem['interval_days'])
@@ -160,11 +173,11 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
         if unconfigured_reminder_names:
             names_str = ' и '.join(unconfigured_reminder_names)
             menu_text += "\n\n" + get_text('main_menu.setup_prompt_dynamic', unconfigured_names=names_str)
-        else:  # This covers the case where only mileage is missing
+        else:
             menu_text += "\n\n" + get_text('main_menu.setup_prompt_generic')
 
     # --- Build Keyboard ---
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    keyboard_buttons = [
         [
             InlineKeyboardButton(text="Мой профиль", callback_data="my_profile"),
             InlineKeyboardButton(text="Обновить пробег", callback_data="update_mileage"),
@@ -176,7 +189,16 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
             )
         ],
         [InlineKeyboardButton(text="Заметки", callback_data="notes")],
-    ])
+    ]
+
+    # --- Dynamically add restart buttons ---
+    for rem in expired_reminders_for_restart:
+        button_text = f"Запустить заново: {rem['name']}"
+        keyboard_buttons.append([
+            InlineKeyboardButton(text=button_text, callback_data=f"restart_reminder:{rem['reminder_id']}")
+        ])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
 
     return menu_text, keyboard
 

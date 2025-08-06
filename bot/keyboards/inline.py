@@ -74,6 +74,7 @@ def get_mileage_tracking_initial_keyboard(reminder_id: int) -> InlineKeyboardMar
                               callback_data=f"edit_mileage_tracking:{reminder_id}")],
         [InlineKeyboardButton(text=get_text('keyboards.start_again'),
                               callback_data=f"reset_mileage_tracking_start:{reminder_id}")],
+        [InlineKeyboardButton(text="❌ Удалить отслеживание", callback_data=f"delete_reminder:{reminder_id}")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="manage_trackings")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -239,6 +240,7 @@ def get_time_tracking_keyboard(reminder_id: int, is_initial: bool = False, is_re
             [InlineKeyboardButton(text=get_text('keyboards.start_again'),
                                   callback_data=f"reset_time_tracking_start:{reminder_id}")])
 
+    buttons.append([InlineKeyboardButton(text="❌ Удалить отслеживание", callback_data=f"delete_reminder:{reminder_id}")])
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="manage_trackings")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -253,6 +255,20 @@ def get_time_tracking_edit_keyboard(reminder_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=get_text('keyboards.edit_tracking_start_mileage'),
                               callback_data=f"edit_reminder_start_date:{reminder_id}")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"manage_reminder:{reminder_id}")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_time_based_notification_keyboard(reminder_id: int, current_day: int) -> InlineKeyboardMarkup:
+    """Returns the keyboard for a time-based reminder notification."""
+    buttons = [
+        [InlineKeyboardButton(
+            text="Не напоминать",
+            callback_data=f"time_notify_stop:{reminder_id}"
+        )],
+        [InlineKeyboardButton(
+            text="Спасибо!",
+            callback_data=f"time_notify_ack:{reminder_id}:{current_day}"
+        )]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -297,6 +313,19 @@ def get_use_current_date_keyboard(back_callback: str) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text=get_text('keyboards.use_current_date', date=current_date),
                               callback_data=f"use_current_date:{current_date}")],
+        [get_back_keyboard(back_callback).inline_keyboard[0][0]]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_use_current_date_for_start_keyboard(back_callback: str) -> InlineKeyboardMarkup:
+    """
+    Returns a keyboard with a 'Use current' date button for the start date of a reminder.
+    This uses a unique callback to distinguish it from other "use current date" actions.
+    """
+    current_date = datetime.now().strftime('%d.%m.%Y')
+    buttons = [
+        [InlineKeyboardButton(text=get_text('keyboards.use_current_date', date=current_date),
+                              callback_data="use_current_date_for_start")],
         [get_back_keyboard(back_callback).inline_keyboard[0][0]]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

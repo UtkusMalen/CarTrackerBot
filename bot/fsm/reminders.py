@@ -14,6 +14,7 @@ class ReminderFSM(StatesGroup):
 
     # Path 3: Time Target
     get_time_target_date = State()
+    get_time_start_date = State()
 
     # Final step
     configure_notifications = State()

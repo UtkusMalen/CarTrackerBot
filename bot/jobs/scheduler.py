@@ -1,11 +1,47 @@
 import asyncio
+from datetime import datetime, timedelta
 
 from aiogram import Bot
 from loguru import logger
 
 from bot.database.models import Car, Reminder
-from bot.utils.notifications import send_mileage_reminder, send_renewal_notification
+from bot.utils.notifications import send_mileage_reminder, send_renewal_notification, send_time_based_notification
 
+
+async def check_time_based_notifications(bot: Bot):
+    """Checks for time-based reminders that are due for a notification."""
+    logger.info("Scheduler running job: check_time_based_notifications")
+    try:
+        reminders_to_check = await Reminder.get_reminders_for_notification()
+        if not reminders_to_check:
+            logger.info("No active time-based reminders found for notification checks.")
+            return
+
+        logger.info(f"Found {len(reminders_to_check)} reminders to check for notifications.")
+        today = datetime.now().date()
+
+        for rem in reminders_to_check:
+            try:
+                start_date = datetime.strptime(rem['last_reset_date'], '%Y-%m-%d').date()
+                end_date = start_date + timedelta(days=rem['interval_days'])
+                remaining_days = (end_date - today).days
+
+                notification_days = [int(d) for d in rem['notification_schedule'].split(',') if d.isdigit()]
+
+                if remaining_days in notification_days:
+                    await send_time_based_notification(
+                        bot=bot,
+                        user_id=rem['user_id'],
+                        car_name=rem['car_name'],
+                        reminder_name=rem['name'],
+                        days_left=remaining_days,
+                        reminder_id=rem['reminder_id']
+                    )
+            except Exception as inner_e:
+                logger.error(f"Error processing notification for reminder {rem['reminder_id']}: {inner_e}")
+
+    except Exception as e:
+        logger.error(f"An error occurred in scheduled job check_time_based_notifications: {e}")
 
 async def check_mileage_updates(bot: Bot):
     logger.info("Scheduler started. First check will run in 60 seconds.")
@@ -54,6 +90,7 @@ async def daily_scheduler(bot: Bot):
     while True:
         await check_mileage_updates(bot)
         await check_expired_reminders(bot)
+        await check_time_based_notifications(bot)
 
         logger.info("Scheduler jobs finished. Sleeping for 24 hours (86400 seconds).")
         await asyncio.sleep(86400)

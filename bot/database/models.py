@@ -368,6 +368,26 @@ class Reminder:
             return await cursor.fetchone()
 
     @staticmethod
+    async def get_reminders_for_notification() -> List[aiosqlite.Row]:
+        logger.debug("Querying for time-based reminders for notification check.")
+        async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
+
+            query = """
+                SELECT r.reminder_id, r.name, c.user_id, c.name as car_name,
+                    r.last_reset_date, r.interval_days, r.notification_schedule
+                FROM reminders r
+                JOIN cars c ON r.car_id = c.car_id
+                WHERE r.type = 'time'
+                    AND r.last_reset_date IS NOT NULL
+                    AND r.interval_days IS NOT NULL
+                    AND r.notification_schedule IS NOT NULL
+                    AND r.notification_schedule != ''
+            """
+            cursor = await db.execute(query)
+            return await cursor.fetchall()
+
+    @staticmethod
     async def reset_mileage_reminder(reminder_id: int, current_mileage: int) -> None:
         logger.info(f"Resetting mileage reminder {reminder_id} at mileage {current_mileage}")
         async with aiosqlite.connect("bot_database.db") as db:

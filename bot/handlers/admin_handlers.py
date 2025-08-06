@@ -8,9 +8,9 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from bot.config import config
 from bot.fsm.admin import AdminFSM
-from bot.database.models import User, Car, Transaction
+from bot.database.models import User, Car, Transaction, Reminder
 from bot.keyboards.inline import get_admin_panel_keyboard, get_mailing_confirmation_keyboard
-from bot.utils.notifications import send_mileage_reminder
+from bot.utils.notifications import send_mileage_reminder, send_time_based_notification
 from bot.utils.text_manager import get_text
 
 router = Router()
@@ -189,3 +189,53 @@ async def test_mileage_update_reminder(message: Message, bot: Bot):
     if not success:
         logger.error(f"Failed to send test mileage reminder to admin {user_id}.")
         await message.reply("Произошла ошибка при отправке тестового напоминания.")
+
+@router.message(Command("test_time_reminder"), F.from_user.id.in_(config.admin_ids))
+async def test_time_based_notification_command(message: Message, bot: Bot):
+    """
+    Sends a test notification for the first available time-based reminder
+    of the admin's active car.
+    """
+    admin_id = message.from_user.id
+    logger.info(f"Admin {admin_id} initiated a test time-based notification.")
+
+    active_car = await Car.get_active_car(admin_id)
+    if not active_car:
+        logger.warning(f"Admin {admin_id} has no active car to test time-based reminder.")
+        await message.reply("У вас нет активного автомобиля для теста.")
+        return
+
+    reminders = await Reminder.get_reminders_for_car(active_car['car_id'])
+    time_reminder = None
+    for rem in reminders:
+        if rem['type'] == 'time' and rem['last_reset_date'] and rem['interval_days']:
+            time_reminder = rem
+            break
+
+    if not time_reminder:
+        logger.warning(f"Admin {admin_id} has no configured time-based reminders for the active car.")
+        await message.reply(
+            "Не найдено ни одного настроенного отслеживания по времени для активного автомобиля. "
+            "Создайте его и попробуйте снова."
+        )
+        return
+
+    reminder_id = time_reminder['reminder_id']
+    reminder_name = time_reminder['name']
+    car_name = active_car['name']
+    days_left_for_test = 7
+
+    await message.reply(f"Отправляю тестовое уведомление для отслеживания '{reminder_name}'.")
+
+    success = await send_time_based_notification(
+        bot=bot,
+        user_id=admin_id,
+        car_name=car_name,
+        reminder_name=reminder_name,
+        days_left=days_left_for_test,
+        reminder_id=reminder_id
+    )
+
+    if not success:
+        logger.error(f"Failed to send test time-based notification to admin {admin_id}.")
+        await message.reply("Произошла ошибка при отправке тестового уведомления.")
