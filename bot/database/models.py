@@ -1,5 +1,7 @@
+from sqlite3 import Row
+
 import aiosqlite
-from typing import Optional, Tuple, Set, Dict, Any
+from typing import Optional, Tuple, Set, Dict, Any, List
 
 from loguru import logger
 
@@ -31,13 +33,13 @@ class User:
         logger.debug(f"Calculating rank for user_id: {user_id}")
         async with aiosqlite.connect("bot_database.db") as db:
             query = """
-                SELECT rank 
+                SELECT rank
                 FROM (
-                    SELECT 
-                        user_id, 
-                        ROW_NUMBER() OVER (ORDER BY balance_nuts DESC, user_id ASC) as rank 
+                    SELECT
+                        user_id,
+                        ROW_NUMBER() OVER (ORDER BY balance_nuts DESC, user_id ASC) as rank
                     FROM users
-                ) 
+                )
                 WHERE user_id = ?
             """
             cursor = await db.execute(query, (user_id,))
@@ -145,10 +147,10 @@ class User:
 
 class Car:
     @staticmethod
-    async def add_car(user_id: int, name: str, mileage: int) -> None:
+    async def add_car(user_id: int, name: str, mileage: Optional[int]) -> int:
         logger.info(f"User {user_id} is adding a new car: Name='{name}', Mileage={mileage}")
         async with aiosqlite.connect("bot_database.db") as db:
-            cursor =await db.execute(
+            cursor = await db.execute(
                 """
                 INSERT INTO cars (user_id, name, mileage)
                 VALUES (?, ?, ?)
@@ -160,13 +162,13 @@ class Car:
             return cursor.lastrowid
 
     @staticmethod
-    async def get_active_car(user_id: int) -> Optional[tuple]:
+    async def get_active_car(user_id: int) -> Optional[aiosqlite.Row]:
         logger.debug(f"Fetching active car for user_id: {user_id}")
         async with aiosqlite.connect("bot_database.db") as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT active_car_id FROM users WHERE user_id = ?", (user_id,))
             active_id_row = await cursor.fetchone()
-            active_id = active_id_row[0] if active_id_row else None
+            active_id = active_id_row['active_car_id'] if active_id_row else None
 
             if active_id:
                 car_cursor = await db.execute("SELECT * FROM cars WHERE car_id = ?", (active_id,))
@@ -176,14 +178,14 @@ class Car:
                 latest_car_cursor = await db.execute("SELECT * FROM cars WHERE user_id = ? ORDER BY car_id DESC LIMIT 1", (user_id,))
                 latest_car = await latest_car_cursor.fetchone()
                 if latest_car:
-                    logger.info(f"Auto-setting latest car {latest_car[0]} as active for user {user_id}")
-                    await db.execute("UPDATE users SET active_car_id = ? WHERE user_id = ?", (latest_car[0], user_id))
+                    logger.info(f"Auto-setting latest car {latest_car['car_id']} as active for user {user_id}")
+                    await db.execute("UPDATE users SET active_car_id = ? WHERE user_id = ?", (latest_car['car_id'], user_id))
                     await db.commit()
                     return latest_car
             return None
 
     @staticmethod
-    async def get_all_cars_for_user(user_id: int) -> list:
+    async def get_all_cars_for_user(user_id: int) -> List[aiosqlite.Row]:
         logger.debug(f"Fetching all cars for user_id: {user_id}")
         async with aiosqlite.connect("bot_database.db") as db:
             db.row_factory = aiosqlite.Row
@@ -233,7 +235,8 @@ class Car:
                 FROM cars c
                 JOIN users u ON c.user_id = u.user_id
                 WHERE c.car_id = u.active_car_id
-                    AND julianday('now') - julianday(c.last_mileage_update_at) >= u.mileage_reminder_period
+                    AND c.mileage IS NOT NULL
+                    AND julianday('now') - julianday(c.last_mileage_update_at) >= 7
             """
             cursor = await db.execute(query)
             return await cursor.fetchall()
@@ -297,16 +300,6 @@ class Car:
             await db.execute(query, tuple(values))
             await db.commit()
 
-    @staticmethod
-    async def update_insurance(car_id: int, start_date: str, duration_days: int) -> None:
-        async with aiosqlite.connect("bot_database.db") as db:
-            await db.execute(
-                "UPDATE cars SET insurance_start_date = ?, insurance_duration_days = ? WHERE car_id = ?",
-                (start_date, duration_days, car_id)
-            )
-            await db.commit()
-            logger.info(f"Updated insurance for car_id {car_id}.")
-
 
 class Note:
     @staticmethod
@@ -341,35 +334,42 @@ class Note:
 
 class Reminder:
     @staticmethod
-    async def add_reminder(car_id: int, name: str, interval: int, last_reset: int) -> None:
-        logger.info(f"Adding reminder '{name}' for car_id {car_id} with interval {interval}km")
-        async with aiosqlite.connect("bot_database.db") as db:
-            await db.execute(
-                "INSERT INTO reminders (car_id, name, interval_km, last_reset_mileage) VALUES (?, ?, ?, ?)",
-                (car_id, name, interval, last_reset)
-            )
-            await db.commit()
-
-    @staticmethod
-    async def get_reminders_for_car(car_id: int) -> list[Tuple]:
-        logger.debug(f"Fetching reminders for car_id: {car_id}")
+    async def add_reminder(car_id: int, name: str, type: str, interval_km: Optional[int] = None, last_reset_mileage: Optional[int] = None, interval_days: Optional[int] = None, last_reset_date: Optional[str] = None, target_mileage: Optional[int] = None, target_date: Optional[str] = None) -> int:
+        logger.info(f"Adding reminder '{name}' of type '{type}' for car_id {car_id}")
         async with aiosqlite.connect("bot_database.db") as db:
             cursor = await db.execute(
-                "SELECT reminder_id, name, interval_km, last_reset_mileage FROM reminders WHERE car_id = ?",
+                """
+                INSERT INTO reminders 
+                (car_id, name, type, interval_km, last_reset_mileage, interval_days, last_reset_date, target_mileage, target_date, notification_schedule) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (car_id, name, type, interval_km, last_reset_mileage, interval_days, last_reset_date, target_mileage, target_date, "7,3,1")
+            )
+            await db.commit()
+            return cursor.lastrowid
+
+    @staticmethod
+    async def get_reminders_for_car(car_id: int) -> List[aiosqlite.Row]:
+        logger.debug(f"Fetching reminders for car_id: {car_id}")
+        async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM reminders WHERE car_id = ?",
                 (car_id,)
             )
             return await cursor.fetchall()
 
     @staticmethod
-    async def get_reminder(reminder_id: int) -> Optional[Tuple]:
+    async def get_reminder(reminder_id: int) -> Optional[aiosqlite.Row]:
         logger.debug(f"Fetching reminder data for reminder_id: {reminder_id}")
         async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM reminders WHERE reminder_id = ?", (reminder_id,))
             return await cursor.fetchone()
 
     @staticmethod
-    async def reset_reminder(reminder_id: int, current_mileage: int) -> None:
-        logger.info(f"Resetting reminder {reminder_id} at mileage {current_mileage}")
+    async def reset_mileage_reminder(reminder_id: int, current_mileage: int) -> None:
+        logger.info(f"Resetting mileage reminder {reminder_id} at mileage {current_mileage}")
         async with aiosqlite.connect("bot_database.db") as db:
             await db.execute(
                 "UPDATE reminders SET last_reset_mileage = ? WHERE reminder_id = ?",
@@ -378,13 +378,38 @@ class Reminder:
             await db.commit()
 
     @staticmethod
-    async def update_interval(reminder_id: int, new_interval: int) -> None:
-        logger.info(f"Updating interval for reminder {reminder_id} to {new_interval}km")
+    async def reset_time_reminder(reminder_id: int, start_date: str, repeat: bool = False) -> None:
+        logger.info(f"Resetting time reminder {reminder_id} with start date {start_date}. Repeat: {repeat}")
         async with aiosqlite.connect("bot_database.db") as db:
-            await db.execute(
-                "UPDATE reminders SET interval_km = ? WHERE reminder_id = ?",
-                (new_interval, reminder_id)
-            )
+            if repeat:
+                query = """
+                    UPDATE reminders
+                    SET last_reset_date = date(last_reset_date, '+' || interval_days || ' days')
+                    WHERE reminder_id = ? AND last_reset_date IS NOT NULL AND interval_days IS NOT NULL
+                """
+                await db.execute(query, (reminder_id,))
+            else:
+                await db.execute(
+                    "UPDATE reminders SET last_reset_date = ? WHERE reminder_id = ?",
+                    (start_date, reminder_id)
+                )
+            await db.commit()
+
+    @staticmethod
+    async def update_reminder_details(reminder_id: int, details: Dict[str, Any]) -> None:
+        """Updates the details of a reminder."""
+        if not details:
+            return
+
+        set_clause = ", ".join([f"{key} = ?" for key in details.keys()])
+        values = list(details.values())
+        values.append(reminder_id)
+
+        query = f"UPDATE reminders SET {set_clause} WHERE reminder_id = ?"
+
+        logger.info(f"Updating reminder {reminder_id} with {details}")
+        async with aiosqlite.connect("bot_database.db") as db:
+            await db.execute(query, tuple(values))
             await db.commit()
 
     @staticmethod
@@ -393,6 +418,41 @@ class Reminder:
         async with aiosqlite.connect("bot_database.db") as db:
             await db.execute("DELETE FROM reminders WHERE reminder_id = ?", (reminder_id,))
             await db.commit()
+
+    @staticmethod
+    async def toggle_reminder_repeat(reminder_id: int) -> bool:
+        logger.info(f"Toggling repeat for reminder with reminder_id {reminder_id}")
+        async with aiosqlite.connect("bot_database.db") as db:
+            cursor = await db.execute("SELECT is_repeating FROM reminders WHERE reminder_id = ?", (reminder_id,))
+            row = await cursor.fetchone()
+            if not row:
+                logger.warning(f"Toggle repeat failed: Reminder {reminder_id} not found")
+                return False
+
+            new_state = not (row[0] or False)
+            await db.execute("UPDATE reminders SET is_repeating = ? WHERE reminder_id = ?", (new_state, reminder_id))
+            await db.commit()
+            logger.success(f"Toggled repeat state for reminder {reminder_id} to {new_state}.")
+            return new_state
+
+    @staticmethod
+    async def get_expired_repeating_reminders() -> List[Row]:
+        """Fetches all time-based reminders that are set to repeat and have expired."""
+        logger.debug("Querying for expired repeating reminders.")
+        async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = Row
+            query = """
+                SELECT r.reminder_id, r.name, c.user_id, c.name as car_name
+                FROM reminders r
+                JOIN cars c ON r.car_id = c.car_id
+                WHERE r.type = 'time'
+                  AND r.is_repeating = TRUE
+                  AND r.last_reset_date IS NOT NULL
+                  AND r.interval_days IS NOT NULL
+                  AND julianday('now') - julianday(r.last_reset_date) >= r.interval_days;
+            """
+            cursor = await db.execute(query)
+            return await cursor.fetchall()
 
 class Transaction:
     @staticmethod

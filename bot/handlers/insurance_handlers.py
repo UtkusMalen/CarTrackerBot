@@ -7,23 +7,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from loguru import logger
 
-from bot.database.models import Car
+from bot.database.models import Car, Reminder
 from bot.fsm.insurance import InsuranceFSM
-from bot.keyboards.inline import get_insurance_duration_keyboard, get_back_keyboard
+from bot.keyboards.inline import get_back_keyboard
 from bot.presentation.menus import show_main_menu
 from bot.utils.text_manager import get_text
 
 router = Router()
-
-@router.callback_query(F.data == "add_insurance")
-async def start_add_insurance(callback: CallbackQuery, state: FSMContext):
-    """Starts the process of adding an insurance."""
-    await state.set_state(InsuranceFSM.get_duration)
-    await callback.message.edit_text(
-        get_text('insurance.prompt_duration'),
-        reply_markup=get_insurance_duration_keyboard()
-    )
-    await callback.answer()
 
 @router.callback_query(F.data.startswith("set_insurance_duration:"))
 async def process_duration(callback: CallbackQuery, state: FSMContext):
@@ -64,14 +54,34 @@ async def process_start_date(message: Message, state: FSMContext, bot: Bot):
         await state.clear()
         return
 
+    reminders = await Reminder.get_reminders_for_car(active_car['car_id'])
+    isurance_reminder = next((rem for rem in reminders if rem['name'] == "Страховой полис"), None)
+
+    if isurance_reminder:
+        await Reminder.update_reminder_details(
+            reminder_id=isurance_reminder['reminder_id'],
+            details={
+                "interval_days": duration_days,
+                "last_reset_date": start_date_str
+            }
+        )
+        logger.success(f"User {user_id} updated insurance policy for car {active_car['car_id']}.")
+
+    else:
+        await Reminder.add_reminder(
+            car_id=active_car['car_id'],
+            name="Страховой полис",
+            type='time',
+            interval_days=duration_days,
+            last_reset_date=start_date_str
+        )
+        logger.warning(f"Insurance reminder was missing for car {active_car['car_id']}; created a new one.")
+
     if prompt_message_id:
         try:
             await bot.delete_message(chat_id=message.chat.id, message_id=prompt_message_id)
         except TelegramBadRequest:
             logger.warning(f"Could not delete prompt message {prompt_message_id}. It might have been deleted already.")
-
-    car_id = active_car[0]
-    await Car.update_insurance(car_id, start_date_str, duration_days)
 
     await state.clear()
     await message.delete()

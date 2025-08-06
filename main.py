@@ -9,9 +9,10 @@ from loguru import logger
 from bot.config import config
 from bot.database.database import init_db
 from bot.handlers import user_handlers, registration_handlers, update_handlers, notes_handlers, reminders_handlers, \
-    admin_handlers, notification_handlers, summary_handlers, insurance_handlers
-from bot.jobs.scheduler import check_mileage_updates
+    admin_handlers, summary_handlers, insurance_handlers
+from bot.jobs.scheduler import check_mileage_updates, daily_scheduler
 from bot.middleware.logging_middleware import LoggingMiddleware
+
 
 async def main() -> None:
     """Initializes the bot."""
@@ -39,13 +40,14 @@ async def main() -> None:
     dp.include_router(notes_handlers.router)
     dp.include_router(reminders_handlers.router)
     dp.include_router(admin_handlers.router)
-    dp.include_router(notification_handlers.router)
+    #dp.include_router(notification_handlers.router)
     dp.include_router(summary_handlers.router)
     dp.include_router(insurance_handlers.router)
 
     logger.info("Routers included")
 
     asyncio.create_task(check_mileage_updates(bot))
+    asyncio.create_task(daily_scheduler(bot))
 
     # Start polling
     logger.info("Starting polling")

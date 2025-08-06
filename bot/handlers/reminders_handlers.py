@@ -1,171 +1,603 @@
 import asyncio
+from datetime import timedelta, datetime
 
 from aiogram import Router, F, Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
+from aiosqlite import Row
 from loguru import logger
 
 from bot.config import config
+from bot.database.models import Car, Reminder, Transaction, User
 from bot.fsm.reminders import ReminderFSM
-from bot.database.models import Car, Reminder, Transaction
-from bot.keyboards.inline import get_create_reminder_keyboard, get_reminder_management_keyboard, get_back_keyboard
-from bot.presentation.menus import show_main_menu, _get_main_menu_content
+from bot.keyboards.inline import (
+    get_tracking_menu_keyboard,
+    get_back_keyboard,
+    get_reminder_management_keyboard,
+    get_mileage_tracking_initial_keyboard,
+    get_time_tracking_keyboard,
+    get_mileage_tracking_edit_keyboard,
+    get_time_tracking_edit_keyboard,
+    get_reset_mileage_tracking_keyboard,
+    get_reset_time_tracking_keyboard,
+    get_reminder_type_keyboard, get_use_current_mileage_keyboard, get_use_current_date_keyboard,
+    get_notification_config_keyboard
+)
+from bot.presentation.menus import show_main_menu
 from bot.utils.text_manager import get_text
 
 router = Router()
 
-@router.callback_query(F.data == "create_reminder")
-async def create_reminder_entry(callback: CallbackQuery, state: FSMContext):
+
+# #################################################################
+# #################### CONTENT HELPER FUNCTIONS ###################
+# #################################################################
+
+async def _get_mileage_tracking_menu_content(reminder: Row, car: Row) -> tuple[str, InlineKeyboardMarkup]:
+    """
+    Generates the text and keyboard for the mileage tracking detail menu.
+    This is now fully dynamic.
+    """
+    menu_parts = [get_text('reminders.manage_header', name=reminder['name'])]
+
+    interval_val = reminder['interval_km'] if reminder['interval_km'] is not None else get_text(
+        'reminders.manage_mileage_based.value_not_set')
+    menu_parts.append(get_text('reminders.manage_mileage_based.interval_line', value=interval_val))
+
+    start_val = reminder['last_reset_mileage'] if reminder['last_reset_mileage'] is not None else get_text(
+        'reminders.manage_mileage_based.value_not_set')
+    menu_parts.append(get_text('reminders.manage_mileage_based.start_mileage_line', value=start_val))
+
+    is_fully_configured = all([
+        reminder['last_reset_mileage'] is not None,
+        reminder['interval_km'] is not None,
+        car and car['mileage'] is not None
+    ])
+
+    if is_fully_configured:
+        remaining_km = (reminder['last_reset_mileage'] + reminder['interval_km']) - car['mileage']
+        remaining_val = max(0, remaining_km)
+        keyboard = get_reminder_management_keyboard(reminder['reminder_id'])
+    else:
+        remaining_val = get_text('reminders.manage_mileage_based.value_not_set')
+        keyboard = get_mileage_tracking_initial_keyboard(reminder['reminder_id'])
+
+    menu_parts.append(get_text('reminders.manage_mileage_based.remaining_line', value=remaining_val))
+
+    if not is_fully_configured:
+        menu_parts.append(get_text('reminders.manage_mileage_based.setup_prompt'))
+
+    menu_text = "\n".join(menu_parts)
+    return menu_text, keyboard
+
+
+async def _get_time_tracking_menu_content(reminder: Row) -> tuple[str, InlineKeyboardMarkup]:
+    """Generates the text and keyboard for the time tracking detail menu."""
+    text = get_text('reminders.manage_time_based.header', name=reminder['name'])
+    is_configured = reminder['last_reset_date'] and reminder['interval_days']
+
+    if is_configured:
+        start_date = datetime.strptime(reminder['last_reset_date'], '%Y-%m-%d').date()
+        end_date = start_date + timedelta(days=reminder['interval_days'])
+        remaining_days = (end_date - datetime.now().date()).days
+
+        text += "\n" + get_text('reminders.manage_time_based.details',
+                                start_date=start_date.strftime('%d.%m.%Y'),
+                                end_date=end_date.strftime('%d.%m.%Y'),
+                                remaining_days=max(0, remaining_days))
+        text += "\n\n" + get_text('reminders.manage_time_based.prompt_reset')
+        keyboard = get_time_tracking_keyboard(reminder['reminder_id'], is_repeating=reminder['is_repeating'])
+    else:
+        text += "\n\n" + get_text('reminders.manage_time_based.prompt_initial')
+        keyboard = get_time_tracking_keyboard(reminder['reminder_id'], is_initial=True)
+
+    return text, keyboard
+
+
+# #################################################################
+# ###################### MENU NAVIGATION ##########################
+# #################################################################
+
+@router.callback_query(F.data == "manage_trackings")
+async def show_tracking_list_menu(callback: CallbackQuery):
+    """Displays the list of all trackings (reminders) for the active car."""
     user_id = callback.from_user.id
-    logger.info(f"User {user_id} entered reminder creation flow.")
+    logger.info(f"User {user_id} requested the tracking management menu.")
+
     car = await Car.get_active_car(user_id)
     if not car:
         await callback.answer(get_text('main_menu.add_car_first'), show_alert=True)
         return
 
-    text = get_text('reminders.creation_prompt')
-    try:
-        msg = await callback.message.edit_text(text, reply_markup=get_create_reminder_keyboard())
-        await state.update_data(prompt_message_id=msg.message_id)
-    except TelegramBadRequest:
-        logger.warning(f"Could not edit message to start reminder creation for user {user_id}, sending new one.")
-        msg = await callback.message.answer(text, reply_markup=get_create_reminder_keyboard())
-        await state.update_data(prompt_message_id=msg.message_id)
-    finally:
-        await callback.answer()
+    user_data = await User.get_user(user_id)
+    balance = user_data[3] if user_data else 0
+    reminders = await Reminder.get_reminders_for_car(car['car_id'])
 
-@router.callback_query(F.data == "create_reminder_custom")
-async def create_custom_reminder_start(callback: CallbackQuery, state: FSMContext):
-    logger.debug(f"User {callback.from_user.id} chose to create a custom reminder.")
-    await state.set_state(ReminderFSM.set_name)
-    await callback.message.edit_text(get_text('reminders.creation_custom_prompt'), reply_markup=get_back_keyboard("create_reminder"))
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("create_reminder_preset:"))
-async def create_preset_reminder_start(callback: CallbackQuery, state: FSMContext):
-    name = callback.data.split(":")[1]
-    logger.debug(f"User {callback.from_user.id} chose to create a preset reminder: '{name}'.")
-    await state.update_data(name=name)
-    await state.set_state(ReminderFSM.set_interval)
-    text = f"{get_text('reminders.preset_header', name=name)}\n\n{get_text('reminders.ask_interval')}"
-    await callback.message.edit_text(text, reply_markup=get_back_keyboard("create_reminder"))
-    await callback.answer()
-
-@router.message(ReminderFSM.set_name)
-async def process_reminder_name(message: Message, state: FSMContext, bot: Bot):
-    logger.debug(f"User {message.from_user.id} (State: set_name) entered reminder name: '{message.text}'.")
-    await state.update_data(name=message.text)
-    await state.set_state(ReminderFSM.set_interval)
-    text = f"{get_text('reminders.preset_header', name=message.text)}\n\n{get_text('reminders.ask_interval')}"
-    data = await state.get_data()
-    prompt_message_id = data.get('prompt_message_id')
-    await message.delete()
-    if prompt_message_id:
-        await bot.edit_message_text(text, chat_id=message.chat.id, message_id=prompt_message_id, reply_markup=get_back_keyboard("create_reminder"))
-
-@router.message(ReminderFSM.set_interval)
-async def process_reminder_interval(message: Message, state: FSMContext, bot: Bot):
-    user_id = message.from_user.id
-    logger.debug(f"User {user_id} (State: set_interval) entered interval: '{message.text}'.")
-    if not message.text.isdigit():
-        logger.warning(f"User {user_id} entered non-digit interval: '{message.text}'.")
-        error_msg = await message.answer(get_text('errors.must_be_digit'))
-        await message.delete()
-        await asyncio.sleep(5)
-        await error_msg.delete()
-        return
-
-    await state.update_data(interval_km=int(message.text))
-    await state.set_state(ReminderFSM.set_last_reset_mileage)
-    car = await Car.get_active_car(user_id)
-    data = await state.get_data()
-    prompt_message_id = data.get('prompt_message_id')
-    await message.delete()
-    if prompt_message_id:
-        await bot.edit_message_text(
-            get_text('reminders.ask_last_reset', mileage=car[3]),
-            chat_id=message.chat.id, message_id=prompt_message_id, reply_markup=get_back_keyboard("create_reminder")
-        )
-
-@router.message(ReminderFSM.set_last_reset_mileage)
-async def process_reminder_last_reset(message: Message, state: FSMContext, bot: Bot):
-    user_id = message.from_user.id
-    logger.debug(f"User {user_id} (State: set_last_reset_mileage) entered last reset mileage: '{message.text}'.")
-    if not message.text.isdigit():
-        logger.warning(f"User {user_id} entered non-digit for last reset mileage: '{message.text}'.")
-        error_msg = await message.answer(get_text('errors.must_be_digit'))
-        await message.delete()
-        await asyncio.sleep(5)
-        await error_msg.delete()
-        return
-
-    data = await state.get_data()
-    car = await Car.get_active_car(user_id)
-    await Reminder.add_reminder(
-        car_id=car[0],
-        name=data['name'],
-        interval=data['interval_km'],
-        last_reset=int(message.text)
+    text = get_text(
+        'reminders.tracking_menu_header',
+        car_name=car['name'],
+        cost=config.costs.create_reminder,
+        balance=balance
     )
+    keyboard = get_tracking_menu_keyboard(reminders)
 
-    description = "Создание напоминания"
-    if not await Transaction.has_received_reward(user_id, description):
-        await Transaction.add_transaction(
-            user_id,
-            config.rewards.add_reminder,
-            description
-        )
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
 
-    logger.success(f"User {user_id} successfully created reminder '{data['name']}' for car {car[0]}.")
-
-    prompt_message_id = data.get('prompt_message_id')
-    await state.clear()
-    await message.delete()
-
-    if prompt_message_id:
-        content = await _get_main_menu_content(user_id)
-        if content:
-            text, keyboard = content
-            try:
-                await bot.edit_message_text(text, chat_id=message.chat.id, message_id=prompt_message_id, reply_markup=keyboard)
-            except TelegramBadRequest as e:
-                logger.error(f"Failed to edit message into main menu for user {user_id}: {e}")
-                await show_main_menu(message, user_id, edit=False)
-    else:
-        await show_main_menu(message, user_id, edit=True)
 
 @router.callback_query(F.data.startswith("manage_reminder:"))
-async def manage_reminder_menu(callback: CallbackQuery):
-    user_id = callback.from_user.id
+async def manage_reminder_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Acts as a router to direct to the correct management menu based on reminder type."""
+    await state.clear()
     reminder_id = int(callback.data.split(":")[1])
-    logger.info(f"User {user_id} is managing reminder {reminder_id}.")
+    logger.info(f"User {callback.from_user.id} managing reminder {reminder_id}.")
+
     reminder = await Reminder.get_reminder(reminder_id)
     if not reminder:
         await callback.answer(get_text('reminders.not_found'), show_alert=True)
         return
 
-    _, _, name, interval, last_reset = reminder
+    if reminder['type'] == 'time':
+        await show_time_tracking_detail_menu(callback.message, reminder, bot, callback_id=callback.id)
+    else:
+        await show_mileage_tracking_detail_menu(callback.message, callback.from_user.id, reminder, bot,
+                                                callback_id=callback.id)
+
+
+async def show_mileage_tracking_detail_menu(message: Message, user_id: int, reminder: Row, bot: Bot,
+                                            callback_id: str = None):
+    """Displays the detail menu for a mileage-based tracking."""
     car = await Car.get_active_car(user_id)
-    remaining_km = (last_reset + interval) - car[3]
-    menu_text = (
-        f"{get_text('reminders.manage_header', name=name)}\n"
-        f"{get_text('reminders.manage_regularity', interval=interval)}\n"
-        f"{get_text('reminders.manage_remaining', remaining_km=max(0, remaining_km))}\n\n"
-        f"{get_text('reminders.manage_prompt')}"
+    if not car: return
+
+    menu_text, keyboard = await _get_mileage_tracking_menu_content(reminder, car)
+
+    await bot.edit_message_text(menu_text, chat_id=message.chat.id, message_id=message.message_id,
+                                reply_markup=keyboard)
+    if callback_id:
+        await bot.answer_callback_query(callback_id)
+
+
+async def show_time_tracking_detail_menu(message: Message, reminder: Row, bot: Bot, callback_id: str = None):
+    """Displays the detail menu for a time-based tracking."""
+    text, keyboard = await _get_time_tracking_menu_content(reminder)
+
+    await bot.edit_message_text(text, chat_id=message.chat.id, message_id=message.message_id, reply_markup=keyboard)
+    if callback_id:
+        await bot.answer_callback_query(callback_id)
+
+
+# #################################################################
+# ################### NEW REMINDER CREATION FLOW ##################
+# #################################################################
+
+@router.callback_query(F.data == "create_reminder")
+async def create_reminder_start(callback: CallbackQuery, state: FSMContext):
+    """Starts the FSM for creating a new reminder by asking for a name."""
+    user_id = callback.from_user.id
+    logger.info(f"User {user_id} entered the new reminder creation flow.")
+
+    cost = config.costs.create_reminder
+    user_data = await User.get_user(user_id)
+    balance = user_data[3] if user_data else 0
+
+    if balance < cost:
+        logger.warning(f"User {user_id} has insufficient funds to create a reminder.")
+        await callback.answer(
+            get_text('reminders.errors.insufficient_funds_for_reminder', cost=cost, balance=balance),
+            show_alert=True
+        )
+        return
+
+    await state.set_state(ReminderFSM.get_name)
+    msg = await callback.message.edit_text(
+        get_text('reminders_flow.prompt_name'),
+        reply_markup=get_back_keyboard("manage_trackings")
     )
-    await callback.message.edit_text(menu_text, reply_markup=get_reminder_management_keyboard(reminder_id))
+    await state.update_data(prompt_message_id=msg.message_id)
     await callback.answer()
 
-@router.callback_query(F.data.startswith("reset_reminder:"))
-async def reset_reminder_counter(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    reminder_id = int(callback.data.split(":")[1])
-    logger.info(f"User {user_id} is resetting reminder {reminder_id}.")
+
+@router.message(ReminderFSM.get_name)
+async def process_reminder_name(message: Message, state: FSMContext, bot: Bot):
+    """Processes the reminder name and asks for its type."""
+    await state.update_data(name=message.text)
+    await state.set_state(ReminderFSM.choose_type)
+
+    data = await state.get_data()
+    prompt_message_id = data.get("prompt_message_id")
+    await message.delete()
+
+    if prompt_message_id:
+        await bot.edit_message_text(
+            get_text('reminders_flow.prompt_type'),
+            chat_id=message.chat.id,
+            message_id=prompt_message_id,
+            reply_markup=get_reminder_type_keyboard()
+        )
+
+
+@router.callback_query(F.data.startswith("set_reminder_type:"))
+async def process_reminder_type(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Processes the chosen reminder type and asks for the next piece of data."""
+    reminder_type = callback.data.split(":")[1]
+    await state.update_data(type=reminder_type)
+
+    data = await state.get_data()
+    reminder_name = data.get("name", "")
+
+    prompt_text = ""
+    next_state = None
+    keyboard = get_back_keyboard("create_reminder")
+
+    if reminder_type == "mileage_interval":
+        prompt_text = get_text('reminders_flow.prompt_mileage_interval', name=reminder_name)
+        next_state = ReminderFSM.get_mileage_interval
+    elif reminder_type == "exact_mileage":
+        prompt_text = get_text('reminders_flow.prompt_exact_mileage', name=reminder_name)
+        next_state = ReminderFSM.get_exact_mileage_target
+    elif reminder_type == "time":
+        prompt_text = get_text('reminders_flow.prompt_time_target', name=reminder_name)
+        next_state = ReminderFSM.get_time_target_date
+        keyboard = get_use_current_date_keyboard("create_reminder")
+
+    await state.set_state(next_state)
+    await callback.message.edit_text(prompt_text, reply_markup=keyboard)
+    await callback.answer()
+
+
+async def _finish_reminder_creation(state: FSMContext, user_id: int, message: Message, bot: Bot):
+    """A helper function to save the new reminder to the DB and show the final step."""
+    data = await state.get_data()
     car = await Car.get_active_car(user_id)
-    await Reminder.reset_reminder(reminder_id, car[3])
-    await show_main_menu(callback.message, user_id, edit=True)
-    await callback.answer(get_text('reminders.reset_success'), show_alert=True)
+
+    if not car:
+        logger.error(f"User {user_id} tried to create reminder but has no active car.")
+        await state.clear()
+        return
+
+    reminder_id = await Reminder.add_reminder(
+        car_id=car['car_id'],
+        name=data.get('name'),
+        type=data.get('type'),
+        interval_km=data.get('interval_km'),
+        last_reset_mileage=data.get('last_reset_mileage'),
+        target_mileage=data.get('target_mileage'),
+        target_date=data.get('target_date')
+    )
+
+    cost = config.costs.create_reminder
+    await Transaction.add_transaction(user_id, -cost, f"Создание отслеживания: {data.get('name')}")
+    logger.success(f"Charged {user_id} {cost} nuts for creating reminder '{data.get('name')}'.")
+
+    await state.clear()
+
+    final_text = get_text('reminders_flow.creation_success', name=data.get('name'))
+    keyboard = get_notification_config_keyboard(reminder_id)
+
+    prompt_message_id = data.get("prompt_message_id")
+    if prompt_message_id:
+        await bot.edit_message_text(final_text, chat_id=message.chat.id, message_id=prompt_message_id,
+                                    reply_markup=keyboard)
+    else:
+        await message.answer(final_text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("finish_creation:"))
+async def process_finish_creation(callback: CallbackQuery, state: FSMContext):
+    """Handles the final confirmation button, taking the user to the main menu."""
+    await state.clear()
+    await show_main_menu(callback.message, callback.from_user.id, edit=True)
+    await callback.answer()
+
+
+@router.message(ReminderFSM.get_mileage_interval)
+async def process_mileage_interval(message: Message, state: FSMContext, bot: Bot):
+    """Processes the mileage interval and asks for the starting mileage."""
+    if not message.text.isdigit():
+        await message.reply(get_text('errors.must_be_digit'))
+        return
+    await state.update_data(interval_km=int(message.text))
+    await state.set_state(ReminderFSM.get_mileage_interval_start)
+
+    car = await Car.get_active_car(message.from_user.id)
+    data = await state.get_data()
+    reminder_name = data.get("name", "")
+    prompt_text = get_text('reminders_flow.prompt_mileage_interval_start', name=reminder_name)
+    keyboard = get_use_current_mileage_keyboard("create_reminder", car['mileage'] if car else 0)
+
+    data = await state.get_data()
+    prompt_message_id = data.get("prompt_message_id")
+    await message.delete()
+    if prompt_message_id:
+        await bot.edit_message_text(prompt_text, chat_id=message.chat.id, message_id=prompt_message_id,
+                                    reply_markup=keyboard)
+
+
+@router.message(ReminderFSM.get_mileage_interval_start)
+async def process_mileage_interval_start(message: Message, state: FSMContext, bot: Bot):
+    if not message.text.isdigit():
+        await message.reply(get_text('errors.must_be_digit'))
+        return
+    await state.update_data(last_reset_mileage=int(message.text))
+    await _finish_reminder_creation(state, message.from_user.id, message, bot)
+    await message.delete()
+
+
+@router.message(ReminderFSM.get_exact_mileage_target)
+async def process_exact_mileage_target(message: Message, state: FSMContext, bot: Bot):
+    if not message.text.isdigit():
+        await message.reply(get_text('errors.must_be_digit'))
+        return
+    await state.update_data(target_mileage=int(message.text))
+    await _finish_reminder_creation(state, message.from_user.id, message, bot)
+    await message.delete()
+
+
+@router.message(ReminderFSM.get_time_target_date)
+async def process_time_target_date(message: Message, state: FSMContext, bot: Bot):
+    try:
+        date_obj = datetime.strptime(message.text, "%d.%m.%Y")
+        date_str = date_obj.strftime("%Y-%m-%d")
+        await state.update_data(target_date=date_str)
+        await _finish_reminder_creation(state, message.from_user.id, message, bot)
+        await message.delete()
+    except ValueError:
+        await message.reply(get_text('errors.invalid_date_format'))
+        return
+
+
+@router.callback_query(F.data.startswith("use_current_mileage:"))
+async def process_use_current_mileage(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    mileage = int(callback.data.split(":")[1])
+    await state.update_data(last_reset_mileage=mileage)
+    await _finish_reminder_creation(state, callback.from_user.id, callback.message, bot)
+
+
+@router.callback_query(F.data.startswith("use_current_date:"))
+async def process_use_current_date(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    await state.update_data(target_date=date_str)
+    await _finish_reminder_creation(state, callback.from_user.id, callback.message, bot)
+
+
+# #################################################################
+# #################### REMINDER EDITING FLOW ######################
+# #################################################################
+
+async def _process_fsm_edit(message: Message, state: FSMContext, bot: Bot, update_dict: dict):
+    """Helper to process FSM updates for editing reminders."""
+    data = await state.get_data()
+    reminder_id = data.get("reminder_id")
+    prompt_message_id = data.get("prompt_message_id")
+    user_id = message.from_user.id
+
+    await message.delete()
+    if not reminder_id or not prompt_message_id:
+        logger.error("State data missing in FSM edit process.")
+        await state.clear()
+        return
+
+    await Reminder.update_reminder_details(reminder_id, update_dict)
+    await state.clear()
+
+    reminder = await Reminder.get_reminder(reminder_id)
+    if not reminder:
+        await show_main_menu(message, user_id, edit=False)
+        return
+
+    if reminder['type'] == 'time':
+        text, keyboard = await _get_time_tracking_menu_content(reminder)
+    else:
+        car = await Car.get_active_car(user_id)
+        text, keyboard = await _get_mileage_tracking_menu_content(reminder, car)
+
+    try:
+        await bot.edit_message_text(
+            text=text,
+            chat_id=message.chat.id,
+            message_id=prompt_message_id,
+            reply_markup=keyboard
+        )
+    except TelegramBadRequest:
+        await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("edit_mileage_tracking:"))
+async def show_edit_mileage_tracking_menu(callback: CallbackQuery):
+    reminder_id = int(callback.data.split(":")[1])
+    reminder = await Reminder.get_reminder(reminder_id)
+    text = get_text('reminders_flow.edit_header', name=reminder["name"])
+    keyboard = get_mileage_tracking_edit_keyboard(reminder_id)
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_reminder_interval_km:"))
+async def start_edit_reminder_interval_km(callback: CallbackQuery, state: FSMContext):
+    reminder_id = int(callback.data.split(":")[1])
+    await state.update_data(reminder_id=reminder_id, prompt_message_id=callback.message.message_id)
+    await state.set_state(ReminderFSM.edit_interval_km)
+    await callback.message.edit_text(
+        get_text('reminders_flow.prompt_edit_interval_km'),
+        reply_markup=get_back_keyboard(f"manage_reminder:{reminder_id}")
+    )
+
+
+@router.message(ReminderFSM.edit_interval_km)
+async def process_edit_reminder_interval_km(message: Message, state: FSMContext, bot: Bot):
+    if not message.text.isdigit():
+        await message.reply(get_text('errors.must_be_digit'))
+        return
+    await _process_fsm_edit(message, state, bot, {"interval_km": int(message.text)})
+
+
+@router.callback_query(F.data.startswith("edit_reminder_last_reset_mileage:"))
+async def start_edit_last_reset_mileage(callback: CallbackQuery, state: FSMContext):
+    reminder_id = int(callback.data.split(":")[1])
+    car = await Car.get_active_car(callback.from_user.id)
+    if not car or car['mileage'] is None:
+        await callback.answer(get_text('errors.mileage_not_set_error'), show_alert=True)
+        return
+
+    reminder = await Reminder.get_reminder(reminder_id)
+    if not reminder:
+        await callback.answer(get_text('reminders.not_found'), show_alert=True)
+        return
+
+    await state.update_data(reminder_id=reminder_id, prompt_message_id=callback.message.message_id)
+    await state.set_state(ReminderFSM.edit_last_reset_mileage)
+    await callback.message.edit_text(
+        text=get_text('reminders_flow.prompt_start_mileage_generic', name=reminder['name']),
+        reply_markup=get_reset_mileage_tracking_keyboard(reminder_id, car['mileage'])
+    )
+
+
+@router.message(ReminderFSM.edit_last_reset_mileage)
+async def process_edit_last_reset_mileage(message: Message, state: FSMContext, bot: Bot):
+    if not message.text.isdigit():
+        await message.reply(get_text('errors.must_be_digit'))
+        return
+    await _process_fsm_edit(message, state, bot, {"last_reset_mileage": int(message.text)})
+
+
+@router.callback_query(F.data.startswith("edit_time_tracking:"))
+async def show_edit_time_tracking_menu(callback: CallbackQuery):
+    reminder_id = int(callback.data.split(":")[1])
+    reminder = await Reminder.get_reminder(reminder_id)
+    text = get_text('reminders_flow.edit_header', name=reminder["name"])
+    keyboard = get_time_tracking_edit_keyboard(reminder_id)
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_reminder_name:"))
+async def start_edit_reminder_name(callback: CallbackQuery, state: FSMContext):
+    reminder_id = int(callback.data.split(":")[1])
+    await state.update_data(reminder_id=reminder_id, prompt_message_id=callback.message.message_id)
+    await state.set_state(ReminderFSM.edit_name)
+    await callback.message.edit_text(
+        get_text('reminders_flow.prompt_edit_name'),
+        reply_markup=get_back_keyboard(f"manage_reminder:{reminder_id}")
+    )
+
+
+@router.message(ReminderFSM.edit_name)
+async def process_edit_reminder_name(message: Message, state: FSMContext, bot: Bot):
+    await _process_fsm_edit(message, state, bot, {"name": message.text})
+
+
+@router.callback_query(F.data.startswith("edit_reminder_interval_days:"))
+async def start_edit_reminder_interval(callback: CallbackQuery, state: FSMContext):
+    reminder_id = int(callback.data.split(":")[1])
+    await state.update_data(reminder_id=reminder_id, prompt_message_id=callback.message.message_id)
+    await state.set_state(ReminderFSM.edit_interval_days)
+    await callback.message.edit_text(
+        get_text('reminders_flow.prompt_edit_interval_days'),
+        reply_markup=get_back_keyboard(f"manage_reminder:{reminder_id}")
+    )
+
+
+@router.message(ReminderFSM.edit_interval_days)
+async def process_edit_reminder_interval(message: Message, state: FSMContext, bot: Bot):
+    if not message.text.isdigit():
+        await message.reply(get_text('errors.must_be_digit'))
+        return
+    await _process_fsm_edit(message, state, bot, {"interval_days": int(message.text)})
+
+
+@router.callback_query(F.data.startswith("edit_reminder_start_date:"))
+async def start_edit_reminder_start_date(callback: CallbackQuery, state: FSMContext):
+    reminder_id = int(callback.data.split(":")[1])
+
+    reminder = await Reminder.get_reminder(reminder_id)
+    if not reminder:
+        await callback.answer(get_text('reminders.not_found'), show_alert=True)
+        return
+
+    await state.update_data(reminder_id=reminder_id, prompt_message_id=callback.message.message_id)
+    await state.set_state(ReminderFSM.edit_start_date)
+    await callback.message.edit_text(
+        text=get_text('reminders_flow.prompt_start_date_generic', name=reminder['name']),
+        reply_markup=get_reset_time_tracking_keyboard(reminder_id)
+    )
+
+
+@router.message(ReminderFSM.edit_start_date)
+async def process_edit_reminder_start_date(message: Message, state: FSMContext, bot: Bot):
+    try:
+        start_date_obj = datetime.strptime(message.text, "%d.%m.%Y")
+        start_date_str = start_date_obj.strftime("%Y-%m-%d")
+        await _process_fsm_edit(message, state, bot, {"last_reset_date": start_date_str})
+    except ValueError:
+        await message.reply(get_text('errors.invalid_date_format'))
+        return
+
+
+# #################################################################
+# ###################### ACTION HANDLERS ##########################
+# #################################################################
+
+
+@router.callback_query(F.data.startswith("reset_mileage_tracking_start:"))
+async def start_reset_mileage_tracking(callback: CallbackQuery, state: FSMContext):
+    """Handles the 'Запустить заново' button for mileage tracking."""
+    await start_edit_last_reset_mileage(callback, state)
+
+
+@router.callback_query(F.data.startswith("reset_time_tracking_start:"))
+async def start_reset_time_tracking(callback: CallbackQuery, state: FSMContext):
+    """Handles the 'Запустить заново' button for time tracking."""
+    await start_edit_reminder_start_date(callback, state)
+
+
+@router.callback_query(F.data.startswith("set_current_mileage:"))
+async def set_current_mileage_for_tracking(callback: CallbackQuery, bot: Bot):
+    reminder_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+    car = await Car.get_active_car(user_id)
+    if not car or car['mileage'] is None:
+        await callback.answer(get_text('errors.mileage_not_set_error'), show_alert=True)
+        return
+
+    await Reminder.update_reminder_details(reminder_id, {"last_reset_mileage": car['mileage']})
+
+    reminder = await Reminder.get_reminder(reminder_id)
+    await show_mileage_tracking_detail_menu(callback.message, user_id, reminder, bot, callback_id=callback.id)
+
+
+@router.callback_query(F.data.startswith("set_current_date:"))
+async def set_current_date_for_tracking(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    reminder_id = int(callback.data.split(":")[1])
+    current_date_str = datetime.now().strftime("%Y-%m-%d")
+
+    await Reminder.update_reminder_details(reminder_id, {"last_reset_date": current_date_str})
+
+    if await state.get_state() is not None:
+        await state.clear()
+
+    reminder = await Reminder.get_reminder(reminder_id)
+    await show_time_tracking_detail_menu(callback.message, reminder, bot, callback_id=callback.id)
+
+
+@router.callback_query(F.data.startswith("toggle_repeat_tracking:"))
+async def toggle_repeat_tracking(callback: CallbackQuery, bot: Bot):
+    """Handles toggling the 'Повторять' button state."""
+    reminder_id = int(callback.data.split(":")[1])
+    new_state_is_repeating = await Reminder.toggle_reminder_repeat(reminder_id)
+
+    if new_state_is_repeating:
+        await callback.answer(get_text('reminders_flow.repeat_on'), show_alert=False)
+    else:
+        await callback.answer(get_text('reminders_flow.repeat_off'), show_alert=False)
+
+    reminder = await Reminder.get_reminder(reminder_id)
+    if reminder:
+        await show_time_tracking_detail_menu(callback.message, reminder, bot)
+    else:
+        await show_main_menu(callback.message, callback.from_user.id, edit=True)
+
 
 @router.callback_query(F.data.startswith("delete_reminder:"))
 async def delete_reminder_confirm(callback: CallbackQuery):

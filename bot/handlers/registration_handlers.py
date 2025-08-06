@@ -1,15 +1,15 @@
 import asyncio
 
 from aiogram import Router, F, Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
-from aiogram.exceptions import TelegramBadRequest
 from loguru import logger
 
 from bot.config import config
-from bot.fsm.registration import RegistrationFSM
-from bot.keyboards.inline import get_oil_interval_keyboard, get_back_keyboard
 from bot.database.models import Car, User, Reminder, Transaction
+from bot.fsm.registration import RegistrationFSM
+from bot.keyboards.inline import get_oil_interval_keyboard, get_back_keyboard, get_registration_step_keyboard
 from bot.presentation.menus import show_main_menu, _get_main_menu_content
 from bot.utils.text_manager import get_text
 
@@ -82,8 +82,20 @@ async def process_car_name(message: Message, state: FSMContext, bot: Bot):
             get_text('registration.prompt_mileage'),
             chat_id=message.chat.id,
             message_id=prompt_message_id,
-            reply_markup=get_back_keyboard("start_registration")
+            reply_markup=get_registration_step_keyboard("start_registration", "skip_mileage")
         )
+
+@router.callback_query(F.data == "skip_mileage")
+async def skip_mileage(callback: CallbackQuery, state: FSMContext):
+    """Skips the mileage step and moves to the next one."""
+    await state.update_data(car_mileage=None)
+    await state.set_state(RegistrationFSM.last_oil_change)
+    await callback.message.edit_text(
+        get_text('registration.prompt_last_oil_change'),
+        reply_markup=get_registration_step_keyboard("start_registration", "skip_last_oil_change")
+    )
+    await callback.answer()
+
 
 @router.message(RegistrationFSM.car_mileage)
 async def process_car_mileage(message: Message, state: FSMContext, bot: Bot):
@@ -107,8 +119,20 @@ async def process_car_mileage(message: Message, state: FSMContext, bot: Bot):
             get_text('registration.prompt_last_oil_change'),
             chat_id=message.chat.id,
             message_id=prompt_message_id,
-            reply_markup=get_back_keyboard("start_registration")
+            reply_markup=get_registration_step_keyboard("start_registration", "skip_last_oil_change")
         )
+
+@router.callback_query(F.data == "skip_last_oil_change")
+async def skip_last_oil_change(callback: CallbackQuery, state: FSMContext):
+    """Skips the last oil change step and moves to the next one."""
+    await state.update_data(last_oil_change=None)
+    await state.set_state(RegistrationFSM.oil_change_interval)
+    await callback.message.edit_text(
+        get_text('registration.prompt_oil_interval'),
+        reply_markup=get_oil_interval_keyboard("start_registration", "skip_oil_interval")
+    )
+    await callback.answer()
+
 
 @router.message(RegistrationFSM.last_oil_change)
 async def process_last_oil_change(message: Message, state: FSMContext, bot: Bot):
@@ -132,23 +156,50 @@ async def process_last_oil_change(message: Message, state: FSMContext, bot: Bot)
             get_text('registration.prompt_oil_interval'),
             chat_id=message.chat.id,
             message_id=prompt_message_id,
-            reply_markup=get_oil_interval_keyboard("start_registration")
+            reply_markup=get_oil_interval_keyboard("start_registration", "skip_oil_interval")
         )
+
+@router.callback_query(F.data == "skip_oil_interval")
+async def skip_oil_interval(callback: CallbackQuery, state: FSMContext):
+    """Skips the oil interval step and finishes registration."""
+    await state.update_data(oil_change_interval=None)
+    await _finish_registration(callback.from_user.id, state)
+    await show_main_menu(callback.message, callback.from_user.id, edit=True)
+    await callback.answer()
+    await state.clear()
+
 
 async def _finish_registration(user_id: int, state: FSMContext):
     logger.info(f"Finishing registration for user {user_id}.")
     data = await state.get_data()
 
+    # Use .get() to safely handle potentially missing (skipped) data
+    car_mileage = data.get('car_mileage')
+    oil_change_interval = data.get('oil_change_interval')
+    last_oil_change = data.get('last_oil_change')
+
     car_id = await Car.add_car(
         user_id,
         data['car_name'],
-        data['car_mileage']
+        car_mileage
     )
 
     await User.set_active_car(user_id, car_id)
 
+    # Add default mileage-based reminder, even if data is missing
     await Reminder.add_reminder(
-        car_id, "Замена масла", data['oil_change_interval'], data['last_oil_change']
+        car_id=car_id,
+        name="Замена масла",
+        type='mileage',
+        interval_km=oil_change_interval,
+        last_reset_mileage=last_oil_change
+    )
+
+    # Add default time-based reminder for insurance (initially empty)
+    await Reminder.add_reminder(
+        car_id=car_id,
+        name="Страховой полис",
+        type='time'
     )
 
     car_cost = data.get("car_cost", 0)

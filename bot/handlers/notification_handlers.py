@@ -1,3 +1,4 @@
+"""
 import asyncio
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
@@ -20,3 +21,4 @@ async def snooze_reminder(callback: CallbackQuery):
 
     await asyncio.sleep(5)
     await callback.message.delete()
+"""

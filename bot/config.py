@@ -16,6 +16,7 @@ class Rewards(BaseModel):
 
 class Costs(BaseModel):
     add_car_slot: int = 1000
+    create_reminder: int = 50
 
 class Settings(BaseSettings):
     """Application settings."""
