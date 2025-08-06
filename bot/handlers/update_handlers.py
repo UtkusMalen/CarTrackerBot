@@ -40,10 +40,6 @@ async def _process_and_update_mileage(user_id: int, new_mileage: int) -> bool:
     if old_mileage is None:
         old_mileage = 0
 
-    if new_mileage < old_mileage:
-        logger.warning(f"User {user_id} tried to update mileage to a lower value ({new_mileage} < {old_mileage}).")
-        return False
-
     today = datetime.now().date()
     last_update_date = datetime.strptime(last_update_str, "%Y-%m-%d").date()
     days_passed = (today - last_update_date).days
@@ -103,7 +99,7 @@ async def process_mileage_update(message: Message, state: FSMContext, bot: Bot):
     success = await _process_and_update_mileage(user_id, new_mileage)
     if not success:
         error_msg = await message.answer(
-            "Не удалось обновить пробег. Возможно, вы ввели значение меньше текущего, или у вас нет активного авто.")
+            "Не удалось обновить пробег. Возможно, у вас нет активного авто.")
         await message.delete()
         await asyncio.sleep(5)
         await error_msg.delete()

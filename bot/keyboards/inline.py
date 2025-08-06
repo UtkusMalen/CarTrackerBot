@@ -92,6 +92,17 @@ def get_mileage_tracking_edit_keyboard(reminder_id: int) -> InlineKeyboardMarkup
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_exact_mileage_edit_keyboard(reminder_id: int) -> InlineKeyboardMarkup:
+    """Returns a keyboard for editing an exact mileage-based reminder."""
+    buttons = [
+        [InlineKeyboardButton(text=get_text('keyboards.edit_tracking_name'),
+                              callback_data=f"edit_reminder_name:{reminder_id}")],
+        [InlineKeyboardButton(text=get_text('keyboards.edit_tracking_target_mileage'),
+                              callback_data=f"edit_reminder_target_mileage:{reminder_id}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"manage_reminder:{reminder_id}")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 def get_reset_mileage_tracking_keyboard(reminder_id: int, current_mileage: int) -> InlineKeyboardMarkup:
     """Returns the keyboard for the mileage prompt when resetting a mileage tracking."""

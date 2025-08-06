@@ -1,4 +1,3 @@
-import asyncio
 from datetime import timedelta, datetime
 
 from aiogram import Router, F, Bot
@@ -22,7 +21,7 @@ from bot.keyboards.inline import (
     get_reset_mileage_tracking_keyboard,
     get_reset_time_tracking_keyboard,
     get_reminder_type_keyboard, get_use_current_mileage_keyboard, get_use_current_date_keyboard,
-    get_notification_config_keyboard
+    get_notification_config_keyboard, get_exact_mileage_edit_keyboard
 )
 from bot.presentation.menus import show_main_menu
 from bot.utils.text_manager import get_text
@@ -39,34 +38,55 @@ async def _get_mileage_tracking_menu_content(reminder: Row, car: Row) -> tuple[s
     Generates the text and keyboard for the mileage tracking detail menu.
     This is now fully dynamic.
     """
-    menu_parts = [get_text('reminders.manage_header', name=reminder['name'])]
+    name = reminder['name']
+    reminder_id = reminder['reminder_id']
+    reminder_type = reminder['type']
 
-    interval_val = reminder['interval_km'] if reminder['interval_km'] is not None else get_text(
-        'reminders.manage_mileage_based.value_not_set')
-    menu_parts.append(get_text('reminders.manage_mileage_based.interval_line', value=interval_val))
+    menu_parts = []
 
-    start_val = reminder['last_reset_mileage'] if reminder['last_reset_mileage'] is not None else get_text(
-        'reminders.manage_mileage_based.value_not_set')
-    menu_parts.append(get_text('reminders.manage_mileage_based.start_mileage_line', value=start_val))
+    if reminder_type == 'exact_mileage':
+        menu_parts.append(get_text('reminders.manage_header', name=name))
+        target_val = reminder['target_mileage'] if reminder['target_mileage'] is not None else get_text(
+            'reminders.manage_mileage_based.value_not_set')
+        menu_parts.append(get_text('reminders.manage_exact_mileage.target_line', value=target_val))
 
-    is_fully_configured = all([
-        reminder['last_reset_mileage'] is not None,
-        reminder['interval_km'] is not None,
-        car and car['mileage'] is not None
-    ])
+        is_fully_configured = reminder['target_mileage'] is not None and car and car['mileage'] is not None
 
-    if is_fully_configured:
-        remaining_km = (reminder['last_reset_mileage'] + reminder['interval_km']) - car['mileage']
-        remaining_val = max(0, remaining_km)
-        keyboard = get_reminder_management_keyboard(reminder['reminder_id'])
+        if is_fully_configured:
+            remaining_km = reminder['target_mileage'] - car['mileage']
+            remaining_val = max(0, remaining_km)
+            keyboard = get_reminder_management_keyboard(reminder_id)
+        else:
+            remaining_val = get_text('reminders.manage_mileage_based.value_not_set')
+            keyboard = get_mileage_tracking_initial_keyboard(reminder_id)
+
+        menu_parts.append(get_text('reminders.manage_exact_mileage.remaining_line', value=remaining_val))
+        if not is_fully_configured:
+            menu_parts.append(get_text('reminders.manage_mileage_based.setup_prompt'))
     else:
-        remaining_val = get_text('reminders.manage_mileage_based.value_not_set')
-        keyboard = get_mileage_tracking_initial_keyboard(reminder['reminder_id'])
+        menu_parts.append(get_text('reminders.manage_header', name=name))
+        interval_val = reminder['interval_km'] if reminder['interval_km'] is not None else get_text(
+            'reminders.manage_mileage_based.value_not_set')
+        menu_parts.append(get_text('reminders.manage_mileage_based.interval_line', value=interval_val))
+        start_val = reminder['last_reset_mileage'] if reminder['last_reset_mileage'] is not None else get_text(
+            'reminders.manage_mileage_based.value_not_set')
+        menu_parts.append(get_text('reminders.manage_mileage_based.start_mileage_line', value=start_val))
+        is_fully_configured = all([
+            reminder['last_reset_mileage'] is not None,
+            reminder['interval_km'] is not None,
+            car and car['mileage'] is not None
+        ])
 
-    menu_parts.append(get_text('reminders.manage_mileage_based.remaining_line', value=remaining_val))
-
-    if not is_fully_configured:
-        menu_parts.append(get_text('reminders.manage_mileage_based.setup_prompt'))
+        if is_fully_configured:
+            remaining_km = (reminder['last_reset_mileage'] + reminder['interval_km']) - car['mileage']
+            remaining_val = max(0, remaining_km)
+            keyboard = get_reminder_management_keyboard(reminder_id)
+        else:
+            remaining_val = get_text('reminders.manage_mileage_based.value_not_set')
+            keyboard = get_mileage_tracking_initial_keyboard(reminder_id)
+        menu_parts.append(get_text('reminders.manage_mileage_based.remaining_line', value=remaining_val))
+        if not is_fully_configured:
+            menu_parts.append(get_text('reminders.manage_mileage_based.setup_prompt'))
 
     menu_text = "\n".join(menu_parts)
     return menu_text, keyboard
@@ -219,7 +239,7 @@ async def process_reminder_name(message: Message, state: FSMContext, bot: Bot):
 
 
 @router.callback_query(F.data.startswith("set_reminder_type:"))
-async def process_reminder_type(callback: CallbackQuery, state: FSMContext, bot: Bot):
+async def process_reminder_type(callback: CallbackQuery, state: FSMContext):
     """Processes the chosen reminder type and asks for the next piece of data."""
     reminder_type = callback.data.split(":")[1]
     await state.update_data(type=reminder_type)
@@ -274,6 +294,8 @@ async def _finish_reminder_creation(state: FSMContext, user_id: int, message: Me
     await state.clear()
 
     final_text = get_text('reminders_flow.creation_success', name=data.get('name'))
+    if data.get("type") == 'time':
+        final_text += f"\n\n{get_text('reminders_flow.creation_success_time_addon')}"
     keyboard = get_notification_config_keyboard(reminder_id)
 
     prompt_message_id = data.get("prompt_message_id")
@@ -387,11 +409,13 @@ async def _process_fsm_edit(message: Message, state: FSMContext, bot: Bot, updat
         await show_main_menu(message, user_id, edit=False)
         return
 
+    text = get_text('reminders_flow.edit_header', name=reminder["name"])
     if reminder['type'] == 'time':
-        text, keyboard = await _get_time_tracking_menu_content(reminder)
+        keyboard = get_time_tracking_edit_keyboard(reminder_id)
+    elif reminder['type'] == 'exact_mileage':
+        keyboard = get_exact_mileage_edit_keyboard(reminder_id)
     else:
-        car = await Car.get_active_car(user_id)
-        text, keyboard = await _get_mileage_tracking_menu_content(reminder, car)
+        keyboard = get_mileage_tracking_edit_keyboard(reminder_id)
 
     try:
         await bot.edit_message_text(
@@ -408,8 +432,16 @@ async def _process_fsm_edit(message: Message, state: FSMContext, bot: Bot, updat
 async def show_edit_mileage_tracking_menu(callback: CallbackQuery):
     reminder_id = int(callback.data.split(":")[1])
     reminder = await Reminder.get_reminder(reminder_id)
+    if not reminder:
+        await callback.answer(get_text('reminders.not_found'), show_alert=True)
+        return
+
     text = get_text('reminders_flow.edit_header', name=reminder["name"])
-    keyboard = get_mileage_tracking_edit_keyboard(reminder_id)
+    if reminder['type'] == 'exact_mileage':
+        keyboard = get_exact_mileage_edit_keyboard(reminder_id)
+    else: # Default to interval based
+        keyboard = get_mileage_tracking_edit_keyboard(reminder_id)
+
     await callback.message.edit_text(text, reply_markup=keyboard)
     await callback.answer()
 
@@ -421,7 +453,7 @@ async def start_edit_reminder_interval_km(callback: CallbackQuery, state: FSMCon
     await state.set_state(ReminderFSM.edit_interval_km)
     await callback.message.edit_text(
         get_text('reminders_flow.prompt_edit_interval_km'),
-        reply_markup=get_back_keyboard(f"manage_reminder:{reminder_id}")
+        reply_markup=get_back_keyboard(f"edit_mileage_tracking:{reminder_id}")
     )
 
 
@@ -475,11 +507,22 @@ async def show_edit_time_tracking_menu(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("edit_reminder_name:"))
 async def start_edit_reminder_name(callback: CallbackQuery, state: FSMContext):
     reminder_id = int(callback.data.split(":")[1])
+    reminder = await Reminder.get_reminder(reminder_id)
+    if not reminder:
+        await callback.answer(get_text('reminders.not_found'), show_alert=True)
+        return
+
     await state.update_data(reminder_id=reminder_id, prompt_message_id=callback.message.message_id)
     await state.set_state(ReminderFSM.edit_name)
+
+    if reminder['type'] == 'time':
+        back_callback = f"edit_time_tracking:{reminder_id}"
+    else:
+        back_callback = f"edit_mileage_tracking:{reminder_id}"
+
     await callback.message.edit_text(
         get_text('reminders_flow.prompt_edit_name'),
-        reply_markup=get_back_keyboard(f"manage_reminder:{reminder_id}")
+        reply_markup=get_back_keyboard(back_callback)
     )
 
 
@@ -495,7 +538,7 @@ async def start_edit_reminder_interval(callback: CallbackQuery, state: FSMContex
     await state.set_state(ReminderFSM.edit_interval_days)
     await callback.message.edit_text(
         get_text('reminders_flow.prompt_edit_interval_days'),
-        reply_markup=get_back_keyboard(f"manage_reminder:{reminder_id}")
+        reply_markup=get_back_keyboard(f"edit_time_tracking:{reminder_id}")
     )
 
 
@@ -607,3 +650,21 @@ async def delete_reminder_confirm(callback: CallbackQuery):
     await Reminder.delete_reminder(reminder_id)
     await show_main_menu(callback.message, user_id, edit=True)
     await callback.answer(get_text('reminders.deleted_success'), show_alert=True)
+
+@router.callback_query(F.data.startswith("edit_reminder_target_mileage:"))
+async def start_edit_target_mileage(callback: CallbackQuery, state: FSMContext):
+    reminder_id = int(callback.data.split(":")[1])
+    await state.update_data(reminder_id=reminder_id, prompt_message_id=callback.message.message_id)
+    await state.set_state(ReminderFSM.edit_target_mileage)
+    await callback.message.edit_text(
+        get_text('reminders_flow.prompt_edit_target_mileage'),
+        reply_markup=get_back_keyboard(f"edit_mileage_tracking:{reminder_id}")
+    )
+
+
+@router.message(ReminderFSM.edit_target_mileage)
+async def process_edit_target_mileage(message: Message, state: FSMContext, bot: Bot):
+    if not message.text.isdigit():
+        await message.reply(get_text('errors.must_be_digit'))
+        return
+    await _process_fsm_edit(message, state, bot, {"target_mileage": int(message.text)})

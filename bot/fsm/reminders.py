@@ -24,3 +24,4 @@ class ReminderFSM(StatesGroup):
     edit_start_date = State()
     edit_interval_km = State()
     edit_last_reset_mileage = State()
+    edit_target_mileage = State()

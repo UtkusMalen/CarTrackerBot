@@ -39,6 +39,7 @@ keyboards:
   edit_tracking_interval_km: "Изменить интервал пробега"
   edit_tracking_start_mileage: "Изменить начало отсчёта"
   edit_tracking_interval_days: "Изменить интервал времени"
+  edit_tracking_target_mileage: "Изменить целевой пробег"
   start_again: "Запустить заново"
   
 # Registration Flow
@@ -272,6 +273,9 @@ reminders:
     edit_header: | 
       Меню редактирования отслеживания:
       "<b>{name}</b>"
+  manage_exact_mileage:
+    target_line: "Целевой пробег: {value} км"
+    remaining_line: "Осталось до цели: {value} км"
   tracking_menu_header: |
     Это меню отслеживаний к автомобилю: <b>{car_name}</b>
 
@@ -303,6 +307,7 @@ reminders_flow:
     Замена антифриза
     Замена салонного фильтра
     Или любое другое...
+  prompt_edit_target_mileage: "Введите новый целевой пробег:"
 
   prompt_type: |
     <b>Осталось настроить тип отслеживания:</b>
@@ -355,7 +360,8 @@ reminders_flow:
     Выбери текущий или укажи свой вариант
 
   # Final messages
-  creation_success: "✅ Отслеживание \"{name}\" успешно создано!\n\nПо умолчанию, мы напомним вам за 7, 3 и 1 день до окончания."
+  creation_success: "✅ Отслеживание \"{name}\" успешно создано!"
+  creation_success_time_addon: "По умолчанию, мы напомним вам за 7, 3 и 1 день до окончания."
 
   # Editing
   edit_header: | 
