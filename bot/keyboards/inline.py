@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiosqlite import Row
 
 from bot.utils.text_manager import get_text
@@ -525,4 +525,104 @@ def get_transaction_history_keyboard(page: int, total_pages: int) -> InlineKeybo
         buttons.append(pagination_buttons)
 
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="my_profile")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_fuel_tracking_menu_keyboard(data: dict) -> InlineKeyboardMarkup:
+    """Generates the dynamic keyboard for the fuel tracking menu."""
+    full_tank_icon = "✅" if data.get("is_full") else "❌"
+    mileage_val = data.get("mileage", get_text('fuel_tracking.value_not_set'))
+    liters_val = data.get("liters", get_text('fuel_tracking.value_not_set'))
+    sum_val = data.get("total_sum", get_text('fuel_tracking.value_not_set'))
+    date_val = data.get("date_str", get_text('fuel_tracking.value_not_set'))
+
+    buttons = [
+        [InlineKeyboardButton(text=get_text('fuel_tracking.full_tank_button', icon=full_tank_icon), callback_data="fuel:toggle_full")],
+        [
+            InlineKeyboardButton(text=get_text('fuel_tracking.mileage_button', value=mileage_val), callback_data="fuel:edit:mileage"),
+            InlineKeyboardButton(text=get_text('fuel_tracking.liters_button', value=liters_val), callback_data="fuel:edit:liters")
+        ],
+        [
+            InlineKeyboardButton(text=get_text('fuel_tracking.sum_button', value=sum_val), callback_data="fuel:edit:sum"),
+            InlineKeyboardButton(text=get_text('fuel_tracking.date_button', value=date_val), callback_data="fuel:edit:date")
+        ],
+        [InlineKeyboardButton(text=get_text('fuel_tracking.create_button'), callback_data="fuel:create")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_fuel_log_keyboard(page: int, total_pages: int, tank_volume: Optional[float]) -> InlineKeyboardMarkup:
+    """Returns the keyboard for the fuel log view."""
+    buttons = []
+    pagination_row = []
+
+    if page > 1:
+        pagination_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"fuel_log_page:{page-1}"))
+    if page < total_pages:
+        pagination_row.append(InlineKeyboardButton(text="➡️", callback_data=f"fuel_log_page:{page+1}"))
+    if pagination_row:
+        buttons.append(pagination_row)
+
+    buttons.append([
+        InlineKeyboardButton(text=get_text('fuel_log.delete_entry_button'), callback_data=f"delete_fuel_entry_start:{page}")
+    ])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="my_expenses")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_delete_fuel_entry_keyboard(entries: List[Row], page: int) -> InlineKeyboardMarkup:
+    """Returns a keyboard for selecting which fuel entry to delete."""
+    buttons = []
+    for entry in entries:
+        date_str = datetime.strptime(entry['created_at'], '%Y-%m-%d').strftime('%d.%m.%y')
+        buttons.append([
+            InlineKeyboardButton(
+                text=get_text('fuel_log.delete_confirm_button', date=date_str, liters=entry['liters']),
+                callback_data=f"delete_fuel_entry_confirm:{entry['entry_id']}:{page}"
+            )
+        ])
+    buttons.append([InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"fuel_log_page:{page}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_expenses_summary_keyboard() -> InlineKeyboardMarkup:
+    """Returns the keyboard for the main expenses summary view."""
+    buttons = [
+        [InlineKeyboardButton(text=get_text('my_expenses.detailed_log_button'), callback_data="detailed_expense_log")],
+        [InlineKeyboardButton(text=get_text('my_expenses.fuel_log_button'), callback_data="fuel_log")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_detailed_expenses_log_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Returns the keyboard for the detailed, paginated expense log."""
+    buttons = [
+        [InlineKeyboardButton(text=get_text('my_expenses.add_expense_button'), callback_data="add_expense")],
+        [
+            InlineKeyboardButton(text=get_text('my_expenses.delete_expense_button'), callback_data=f"delete_expense_start:{page}")
+        ]
+    ]
+    # Pagination
+    pagination_row = []
+    if page > 1:
+        pagination_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"expense_page:{page-1}"))
+    if page < total_pages:
+        pagination_row.append(InlineKeyboardButton(text="➡️", callback_data=f"expense_page:{page+1}"))
+    if pagination_row:
+        buttons.append(pagination_row)
+
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="my_expenses")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_delete_expense_keyboard(expenses: List[Row], page: int) -> InlineKeyboardMarkup:
+    """Returns a keyboard for selecting which expense to delete."""
+    buttons = []
+    for exp in expenses:
+        date_str = datetime.strptime(exp['created_at'], '%Y-%m-%d').strftime('%d.%m.%y')
+        buttons.append([
+            InlineKeyboardButton(
+                text=get_text('my_expenses.delete_confirm_button', date=date_str, category=exp['category_name'], amount=exp['amount']),
+                callback_data=f"delete_expense_confirm:{exp['expense_id']}:{page}"
+            )
+        ])
+    buttons.append([InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"detailed_expense_log_page:{page}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)

@@ -1,3 +1,4 @@
+from datetime import date, datetime, timedelta
 from sqlite3 import Row
 
 import aiosqlite
@@ -619,4 +620,221 @@ class Expense:
                 """,
                 (car_id, category_id, amount, mileage, description, date)
             )
+            await db.commit()
+
+    @staticmethod
+    async def get_expenses_for_car_paginated(car_id: int, page: int, page_size: int = 10) -> List[Row]:
+        """Fetches a paginated list of expenses for a car."""
+        offset = (page - 1) * page_size
+        async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT e.expense_id, e.created_at, c.name as category_name, e.mileage, e.description, e.amount
+                FROM expenses e
+                JOIN expense_categories c ON e.category_id = c.category_id
+                WHERE e.car_id = ?
+                ORDER BY e.created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (car_id, page_size, offset)
+            )
+            return await cursor.fetchall()
+
+    @staticmethod
+    async def get_total_expenses_count_for_car(car_id: int) -> int:
+        """Counts the total number of expenses for a specific car."""
+        async with aiosqlite.connect("bot_database.db") as db:
+            cursor = await db.execute("SELECT COUNT(expense_id) FROM expenses WHERE car_id = ?", (car_id,))
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    @staticmethod
+    async def get_expense_summary_for_car(car_id: int) -> Dict[str, Any]:
+        """Generates a detailed summary of expenses and fuel costs for a car."""
+        summary = {
+            "by_category": {}, "fuel_total": 0,
+            "this_month": 0, "last_month": 0,
+            "this_year": 0, "last_year": 0
+        }
+        today = date.today()
+
+        async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
+            # 1. Sum by category (all time)
+            cat_cursor = await db.execute(
+                """
+                SELECT c.name, SUM(e.amount) as total
+                FROM expenses e JOIN expense_categories c ON e.category_id = c.category_id
+                WHERE e.car_id = ? GROUP BY c.name
+                """,
+                (car_id,)
+            )
+            summary["by_category"] = {row['name']: row['total'] for row in await cat_cursor.fetchall()}
+
+            # 2. Sum fuel costs (all time)
+            fuel_cursor = await db.execute("SELECT SUM(total_sum) FROM fuel_entries WHERE car_id = ?", (car_id,))
+            fuel_row = await fuel_cursor.fetchone()
+            summary["fuel_total"] = fuel_row[0] or 0
+
+            # 3. Sum expenses by time periods
+            exp_cursor = await db.execute("SELECT amount, created_at FROM expenses WHERE car_id = ?", (car_id,))
+            all_expenses = await exp_cursor.fetchall()
+
+            for exp in all_expenses:
+                exp_date = datetime.strptime(exp['created_at'], '%Y-%m-%d').date()
+                if exp_date.year == today.year:
+                    summary["this_year"] += exp['amount']
+                    if exp_date.month == today.month:
+                        summary["this_month"] += exp['amount']
+                elif exp_date.year == today.year - 1:
+                    summary["last_year"] += exp['amount']
+
+                if today.month == 1:
+                    if exp_date.year == today.year - 1 and exp_date.month == 12:
+                        summary["last_month"] += exp['amount']
+                elif exp_date.year == today.year and exp_date.month == today.month - 1:
+                    summary["last_month"] += exp['amount']
+
+        return summary
+
+    @staticmethod
+    async def delete_expense(expense_id: int) -> None:
+        """Deletes a specific expense entry by its ID."""
+        logger.info(f"Deleting expense with ID: {expense_id}")
+        async with aiosqlite.connect("bot_database.db") as db:
+            await db.execute("DELETE FROM expenses WHERE expense_id = ?", (expense_id,))
+            await db.commit()
+
+class FuelEntry:
+    @staticmethod
+    async def add_entry(car_id: int, mileage: int, liters: float, total_sum: Optional[float], is_full: bool, date: str) -> None:
+        """Adds a new fuel entry and calculates consumption if applicable."""
+        async with aiosqlite.connect("bot_database.db") as db:
+            if is_full:
+                # Find the previous full tank entry
+                prev_full_cursor = await db.execute(
+                    """
+                    SELECT entry_id, mileage FROM fuel_entries
+                    WHERE car_id = ? AND is_full_tank = TRUE
+                    ORDER BY created_at DESC, mileage DESC
+                    LIMIT 1
+                    """,
+                    (car_id,)
+                )
+                prev_full_entry = await prev_full_cursor.fetchone()
+
+                if prev_full_entry:
+                    prev_entry_id, prev_mileage = prev_full_entry
+                    distance = mileage - prev_mileage
+
+                    # Sum up all liters since the previous full tank
+                    liters_sum_cursor = await db.execute(
+                        """
+                        SELECT SUM(liters) FROM fuel_entries
+                        WHERE car_id = ? AND mileage > ? AND mileage <= ?
+                        """,
+                        (car_id, prev_mileage, mileage)
+                    )
+                    liters_sum_row = await liters_sum_cursor.fetchone()
+                    total_liters_for_period = (liters_sum_row[0] or 0) + liters
+
+                    if distance > 0:
+                        consumption = (total_liters_for_period / distance) * 100
+                        # Update the *previous* full entry with the calculated consumption
+                        await db.execute(
+                            "UPDATE fuel_entries SET fuel_consumption = ? WHERE entry_id = ?",
+                            (consumption, prev_entry_id)
+                        )
+                        logger.success(f"Calculated fuel consumption for entry {prev_entry_id}: {consumption:.2f} L/100km")
+
+            # Insert the new entry
+            await db.execute(
+                """
+                INSERT INTO fuel_entries (car_id, mileage, liters, total_sum, is_full_tank, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (car_id, mileage, liters, total_sum, is_full, date)
+            )
+            await db.commit()
+            logger.success(f"Added fuel entry for car {car_id}.")
+
+    @staticmethod
+    async def get_fuel_entries_paginated(car_id: int, page: int, page_size: int = 10) -> List[Row]:
+        """
+        Fetches a paginated list of fuel entries, calculating the distance
+        traveled since the previous entry using a window function.
+        """
+        offset = (page - 1) * page_size
+        async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
+            query = """
+                SELECT
+                    entry_id,
+                    mileage,
+                    liters,
+                    total_sum,
+                    is_full_tank,
+                    created_at,
+                    fuel_consumption,
+                    mileage - LAG(mileage, 1, mileage) OVER (ORDER BY created_at, mileage) as distance
+                FROM fuel_entries
+                WHERE car_id = ?
+                ORDER BY created_at DESC, mileage DESC
+                LIMIT ? OFFSET ?
+            """
+            cursor = await db.execute(query, (car_id, page_size, offset))
+            return await cursor.fetchall()
+
+    @staticmethod
+    async def get_total_fuel_entries_count(car_id: int) -> int:
+        """Counts the total number of fuel entries for a car."""
+        async with aiosqlite.connect("bot_database.db") as db:
+            cursor = await db.execute("SELECT COUNT(entry_id) FROM fuel_entries WHERE car_id = ?", (car_id,))
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    @staticmethod
+    async def get_fuel_summary(car_id: int) -> Dict[str, float]:
+        """Calculates summary statistics for fuel entries."""
+        summary = {
+            "liters_this_month": 0, "liters_last_month": 0, "liters_all_time": 0,
+            "sum_this_month": 0, "sum_last_month": 0, "sum_all_time": 0
+        }
+        today = date.today()
+
+        first_day_of_this_month = today.replace(day=1)
+        last_day_of_last_month = first_day_of_this_month - timedelta(days=1)
+        last_month = last_day_of_last_month.month
+        last_month_year = last_day_of_last_month.year
+
+        async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT liters, total_sum, created_at FROM fuel_entries WHERE car_id = ?", (car_id,))
+            all_entries = await cursor.fetchall()
+
+            for entry in all_entries:
+                entry_date = datetime.strptime(entry['created_at'], '%Y-%m-%d').date()
+
+                liters = entry['liters'] or 0
+                total_sum = entry['total_sum'] or 0
+
+                summary["liters_all_time"] += liters
+                summary["sum_all_time"] += total_sum
+
+                if entry_date.year == today.year and entry_date.month == today.month:
+                    summary["liters_this_month"] += liters
+                    summary["sum_this_month"] += total_sum
+                elif entry_date.year == last_month_year and entry_date.month == last_month:
+                    summary["liters_last_month"] += liters
+                    summary["sum_last_month"] += total_sum
+
+        return summary
+
+    @staticmethod
+    async def delete_entry(entry_id: int) -> None:
+        """Deletes a specific fuel entry by its ID."""
+        logger.info(f"Deleting fuel entry with ID: {entry_id}")
+        async with aiosqlite.connect("bot_database.db") as db:
+            await db.execute("DELETE FROM fuel_entries WHERE entry_id = ?", (entry_id,))
             await db.commit()

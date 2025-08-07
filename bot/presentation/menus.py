@@ -88,7 +88,6 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
                 progress = int(progress_percentage * 10)
 
                 if rem_remaining <= 0:
-                    expired_reminders_for_restart.append(rem)  # <-- Add expired exact mileage reminder
                     rem_progress_bar = '🟥' * 10
                     reminders_text_parts.append(
                         get_text('main_menu.reminder_line_due_full_bar').format(
@@ -183,7 +182,10 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
             InlineKeyboardButton(text="Мой профиль", callback_data="my_profile"),
             InlineKeyboardButton(text="Заметки", callback_data="notes")
         ],
-        [InlineKeyboardButton(text="Обновить пробег", callback_data="update_mileage")],
+        [
+            InlineKeyboardButton(text=get_text('my_expenses.menu_button'), callback_data="my_expenses"),
+            InlineKeyboardButton(text="Обновить пробег", callback_data="update_mileage"),
+        ],
         [
             InlineKeyboardButton(
                 text=get_text('main_menu.trackings_button', count=len(reminders)),
@@ -191,6 +193,7 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
             )
         ],
         [
+            InlineKeyboardButton(text=get_text('fuel_tracking.add_button'), callback_data="add_fuel"),
             InlineKeyboardButton(text=get_text('expense.add_button'), callback_data="add_expense")
         ],
     ]

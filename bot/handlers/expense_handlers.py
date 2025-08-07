@@ -1,4 +1,5 @@
 import asyncio
+import math
 from datetime import datetime
 
 from aiogram import Router, F, Bot
@@ -10,11 +11,14 @@ from loguru import logger
 from bot.database.models import Car, Expense, ExpenseCategory
 from bot.fsm.expense import ExpenseFSM
 from bot.keyboards.inline import get_expense_category_keyboard, get_expense_mileage_keyboard, \
-    get_expense_skip_keyboard, get_expense_date_keyboard, get_back_keyboard
+    get_expense_skip_keyboard, get_expense_date_keyboard, get_back_keyboard, get_detailed_expenses_log_keyboard, \
+    get_expenses_summary_keyboard, get_delete_expense_keyboard
 from bot.presentation.menus import show_main_menu
 from bot.utils.text_manager import get_text
 
 router = Router()
+
+EXPENSES_PER_PAGE = 8
 
 async def _finish_expense_tracking(chat_id: int, user_id: int, state: FSMContext, bot: Bot):
     """
@@ -100,7 +104,13 @@ async def process_fast_expense_entry(message: Message, state: FSMContext, bot: B
         return
 
     try:
-        amount = abs(float(parts[1]))
+        amount = float(parts[1])
+        if amount <= 0:
+            await message.delete()
+            msg = await message.answer(get_text('expense.error_amount_must_be_positive'))
+            await asyncio.sleep(5)
+            await msg.delete()
+            return
         mileage = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
 
         description_start_index = 3 if mileage is not None else 2
@@ -142,12 +152,21 @@ async def process_category_selection(callback: CallbackQuery, state: FSMContext,
 
 @router.message(ExpenseFSM.get_amount)
 async def process_expense_amount(message: Message, state: FSMContext, bot: Bot):
-    if not message.text.replace('.', '', 1).isdigit():
+    try:
+        amount = float(message.text)
+        if amount <= 0:
+            await message.delete()
+            msg = await message.answer(get_text('expense.error_amount_must_be_positive'))
+            await asyncio.sleep(5)
+            await msg.delete()
+            return
+    except ValueError:
         await message.delete()
         msg = await message.answer(get_text('errors.must_be_digit'))
         await asyncio.sleep(5)
         await msg.delete()
         return
+
     await state.update_data(amount=float(message.text))
     await state.set_state(ExpenseFSM.get_mileage)
 
@@ -308,3 +327,110 @@ async def create_category_process(message: Message, state: FSMContext, bot: Bot)
             message_id=prompt_message_id,
             reply_markup=get_expense_category_keyboard(categories)
         )
+
+
+async def show_detailed_log(message: Message, user_id: int, page: int = 1, edit: bool = True):
+    car = await Car.get_active_car(user_id)
+    if not car:
+        return
+
+    total_expenses = await Expense.get_total_expenses_count_for_car(car['car_id'])
+    total_pages = math.ceil(total_expenses / EXPENSES_PER_PAGE) if total_expenses > 0 else 1
+    page = max(1, min(page, total_pages))
+
+    expenses = await Expense.get_expenses_for_car_paginated(car['car_id'], page, EXPENSES_PER_PAGE)
+
+    text_lines = [get_text('my_expenses.detailed_log_header', car_name=car['name'])]
+    if not expenses:
+        text_lines.append(get_text('my_expenses.no_expenses_log'))
+    else:
+        for exp in expenses:
+            date_str = datetime.strptime(exp['created_at'], '%Y-%m-%d').strftime('%d.%m.%y')
+            desc_line = f"{exp['description']}\n" if exp['description'] else ""
+
+            if exp['mileage']:
+                line = get_text('my_expenses.detailed_log_entry_with_mileage', date=date_str,
+                                category_name=exp['category_name'], mileage=exp['mileage'], description_line=desc_line,
+                                amount=exp['amount'])
+            else:
+                line = get_text('my_expenses.detailed_log_entry', date=date_str, category_name=exp['category_name'],
+                                description_line=desc_line, amount=exp['amount'])
+            text_lines.append(line)
+
+    text = "\n\n".join(text_lines)
+    keyboard = get_detailed_expenses_log_keyboard(page, total_pages)
+
+    if edit:
+        await message.edit_text(text, reply_markup=keyboard)
+    else:
+        await message.answer(text, reply_markup=keyboard)
+
+
+# --- Summary Menu ---
+@router.callback_query(F.data == "my_expenses")
+async def show_expenses_summary(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    car = await Car.get_active_car(user_id)
+    if not car:
+        await callback.answer(get_text('main_menu.add_car_first'), show_alert=True)
+        return
+
+    summary = await Expense.get_expense_summary_for_car(car['car_id'])
+
+    text_lines = [get_text('my_expenses.summary_header', car_name=car['name'])]
+
+    # Category summary
+    text_lines.append(get_text('my_expenses.category_summary_header'))
+    if summary['by_category']:
+        for cat, total in summary['by_category'].items():
+            text_lines.append(get_text('my_expenses.category_line', category_name=cat, total=total))
+    else:
+        text_lines.append(get_text('my_expenses.no_category_expenses'))
+    text_lines.append(get_text('my_expenses.fuel_line', total=summary['fuel_total']))
+
+    # Time period summary
+    text_lines.append(get_text('my_expenses.time_period_header'))
+    text_lines.append(get_text('my_expenses.this_month', total=summary['this_month']))
+    text_lines.append(get_text('my_expenses.last_month', total=summary['last_month']))
+    text_lines.append(get_text('my_expenses.this_year', total=summary['this_year']))
+    text_lines.append(get_text('my_expenses.last_year', total=summary['last_year']))
+
+    text = "\n".join(text_lines)
+    keyboard = get_expenses_summary_keyboard()
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+
+
+# --- Detailed Log Callbacks ---
+@router.callback_query(F.data.in_({"detailed_expense_log", "detailed_expense_log_page:1"}))
+async def detailed_log_start(callback: CallbackQuery):
+    await show_detailed_log(callback.message, callback.from_user.id, page=1, edit=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("expense_page:"))
+async def detailed_log_paginate(callback: CallbackQuery):
+    page = int(callback.data.split(":")[1])
+    await show_detailed_log(callback.message, callback.from_user.id, page=page, edit=True)
+    await callback.answer()
+
+
+# --- Deletion Flow ---
+@router.callback_query(F.data.startswith("delete_expense_start:"))
+async def delete_expense_start(callback: CallbackQuery):
+    page = int(callback.data.split(":")[1])
+    car = await Car.get_active_car(callback.from_user.id)
+    expenses = await Expense.get_expenses_for_car_paginated(car['car_id'], page, EXPENSES_PER_PAGE)
+
+    await callback.message.edit_text(
+        get_text('my_expenses.delete_prompt'),
+        reply_markup=get_delete_expense_keyboard(expenses, page)
+    )
+
+
+@router.callback_query(F.data.startswith("delete_expense_confirm:"))
+async def delete_expense_confirm(callback: CallbackQuery):
+    _, expense_id, page = callback.data.split(":")
+    await Expense.delete_expense(int(expense_id))
+    await callback.answer(get_text('my_expenses.expense_deleted_success'), show_alert=True)
+    await show_detailed_log(callback.message, callback.from_user.id, page=int(page), edit=True)

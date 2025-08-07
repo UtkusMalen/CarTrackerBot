@@ -75,6 +75,19 @@ class DatabaseManager:
             FOREIGN KEY (car_id) REFERENCES cars (car_id) ON DELETE CASCADE,
             FOREIGN KEY (category_id) REFERENCES expense_categories (category_id)
         );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS fuel_entries (
+            entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            car_id INTEGER NOT NULL,
+            mileage INTEGER NOT NULL,
+            liters REAL NOT NULL,
+            total_sum REAL,
+            is_full_tank BOOLEAN DEFAULT FALSE,
+            created_at DATE NOT NULL,
+            fuel_consumption REAL,
+            FOREIGN KEY (car_id) REFERENCES cars (car_id) ON DELETE CASCADE
+        );
         """
     ]
 

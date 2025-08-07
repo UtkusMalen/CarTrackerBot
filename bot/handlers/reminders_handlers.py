@@ -808,7 +808,7 @@ async def restart_reminder_from_main_menu(callback: CallbackQuery, bot: Bot):
         await callback.answer(get_text('reminders.not_found'), show_alert=True)
         return
 
-    if reminder['type'] in ('mileage_interval', 'exact_mileage'):
+    if reminder['type'] in ('mileage', 'mileage_interval'):
         car = await Car.get_active_car(user_id)
         if car and car['mileage'] is not None:
             await Reminder.reset_mileage_reminder(reminder_id, car['mileage'])
@@ -820,6 +820,7 @@ async def restart_reminder_from_main_menu(callback: CallbackQuery, bot: Bot):
     elif reminder['type'] == 'time':
         current_date_str = datetime.now().strftime("%Y-%m-%d")
         await Reminder.reset_time_reminder(reminder_id, current_date_str)
+        await Reminder.update_reminder_details(reminder_id, {"notification_schedule": "7,3,1"})
         await callback.answer("Отсчёт по времени запущен заново!", show_alert=False)
 
     # Refresh the main menu to show the updated state

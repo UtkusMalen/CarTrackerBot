@@ -417,6 +417,86 @@ expense:
   success_no_desc: "✅ Расход на сумму {amount} успешно добавлен!"
   category_exists: "Категория с таким названием уже существует."
   invalid_fast_format: "Неверный формат. Попробуйте еще раз: <code>Категория Сумма Пробег Описание</code>"
+  error_amount_must_be_positive: "❗️Сумма расхода должна быть положительным числом."
+
+my_expenses:
+  menu_button: "Мои расходы"
+  summary_header: "<b>Мои расходы на \"{car_name}\"</b>"
+  category_summary_header: "\nПо категориям за всё время:"
+  category_line: "{category_name}: {total}"
+  no_category_expenses: "Расходов по категориям нет."
+  fuel_line: "Топливо: {total}"
+  time_period_header: "\nЗа периоды:"
+  this_month: "Текущий месяц: {total}"
+  last_month: | 
+    Прошлый месяц: {total}
+
+  this_year: "Текущий год: {total}"
+  last_year: "Прошлый год: {total}"
+  detailed_log_button: "Подробный журнал расходов"
+  fuel_log_button: "Журнал заправок"
+  detailed_log_header: "<b>Список расходов по автомобилю \"{car_name}\"</b>"
+  detailed_log_entry: |
+    <b>{date} {category_name}</b>
+    {description_line}Сумма: {amount}
+  detailed_log_entry_with_mileage: |
+    <b>{date} {category_name}, {mileage} км</b>
+    {description_line}Сумма: {amount}
+  no_expenses_log: "У вас пока нет записей о расходах."
+  add_expense_button: "Добавить расход"
+  edit_expense_button: "Изменить расход"
+  delete_expense_button: "Удалить расход"
+  delete_prompt: "Какой расход вы хотите удалить?"
+  delete_confirm_button: "❌ {date} {category} {amount}"
+  expense_deleted_success: "Запись о расходе удалена."
+  feature_in_development: "Эта функция находится в разработке."
+
+fuel_tracking:
+  add_button: "+ Топливо"
+  prompt_tank_volume: |
+    Для подсчёта расхода топлива автомобиля нужно указать объём топливного бака.
+    Отправьте в формате: 50
+  skip_button: "Пропустить"
+  prompt_entry_menu: |
+    <b>Создание заправки</b>
+
+    Введите данные одной строкой в формате:
+    <code>Пробег Литры Сумма</code>
+    <b>Например:</b> <code>98000 50 2500</code>
+
+    Или заполните данные кнопками ниже:
+  full_tank_button: "Полный бак: {icon}"
+  mileage_button: "Пробег: {value}"
+  liters_button: "Литры: {value}"
+  sum_button: "Сумма: {value}"
+  date_button: "Дата: {value}"
+  create_button: "Создать"
+  value_not_set: "Не указано"
+  prompt_mileage: "Введите пробег на момент заправки:"
+  prompt_liters: "Введите количество заправленных литров:"
+  prompt_sum: "Введите общую сумму заправки:"
+  prompt_date: "Введите дату заправки в формате ДД.ММ.ГГГГ:"
+  success_message: "✅ Заправка на сумму {total_sum}р успешно добавлена!"
+  success_message_no_sum: "✅ Заправка на {liters}л успешно добавлена!"
+  error_not_enough_data: "❗️Недостаточно данных. Укажите как минимум пробег и количество литров."
+  invalid_fast_format: "Неверный формат. Попробуйте еще раз: <code>Пробег Литры Сумма</code>"
+fuel_log:
+  header: "<b>Список заправок \"{car_name}\"</b>"
+  liters_header: "<b>Литры</b>"
+  liters_this_month: "Текущий месяц: {value}"
+  liters_last_month: "Прошлый месяц: {value}"
+  liters_all_time: "Всё время: {value}"
+  sum_header: "<b>Сумма</b>"
+  sum_this_month: "Текущий месяц: {value}"
+  sum_last_month: "Прошлый месяц: {value}"
+  sum_all_time: "Всё время: {value}"
+  entry_line: "{date} {liters} литров +{distance}км\nСумма: {total_sum}\nРасход: {consumption}\n"
+  consumption_unknown: "УКАЖИТЕ ОБЪЁМ БАКА для расчёта"
+  delete_entry_button: "Удалить заправку"
+  pages_button: "страницы ➡️"
+  delete_prompt: "Какую заправку вы хотите удалить?"
+  delete_confirm_button: "❌ {date} {liters}л"
+  entry_deleted_success: "Запись о заправке удалена."
 
 admin:
   panel_header: "<b>Панель администратора</b>"
