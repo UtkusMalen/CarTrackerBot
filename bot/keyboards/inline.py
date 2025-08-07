@@ -9,7 +9,7 @@ from bot.utils.text_manager import get_text
 
 def get_start_keyboard() -> InlineKeyboardMarkup:
     """Returns the initial keyboard for the bot."""
-    button = [[InlineKeyboardButton(text="Поехали!", callback_data="start_registration")]]
+    button = [[InlineKeyboardButton(text="🚀 Поехали!", callback_data="start_registration")]]
     return InlineKeyboardMarkup(inline_keyboard=button)
 
 
@@ -129,7 +129,7 @@ def get_confirm_keyboard(yes_callback: str, no_callback: str) -> InlineKeyboardM
 def get_notes_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
     """Returns the keyboard for the notes menu with pagination."""
     buttons = [
-        [InlineKeyboardButton(text="Добавить запись", callback_data="add_note")],
+        [InlineKeyboardButton(text="➕ Добавить запись", callback_data="add_note")],
         [
             InlineKeyboardButton(text="Удалить запись", callback_data=f"delete_note_start:{page}"),
             InlineKeyboardButton(text="📌 Закрепить/Открепить", callback_data=f"pin_note_start:{page}")
@@ -193,7 +193,7 @@ def get_garage_keyboard(cars: List[Row]) -> InlineKeyboardMarkup:
             ])
 
         buttons.append([
-            InlineKeyboardButton(text="+ Добавить автомобиль", callback_data="start_registration")
+            InlineKeyboardButton(text="➕ Добавить автомобиль", callback_data="start_registration")
         ])
         buttons.append([
             InlineKeyboardButton(text="❌ Удалить автомобиль", callback_data="delete_car_start")
@@ -359,9 +359,26 @@ def get_notification_config_keyboard(reminder_id: int) -> InlineKeyboardMarkup:
 def get_admin_panel_keyboard() -> InlineKeyboardMarkup:
     """Returns the main admin panel keyboard"""
     buttons = [
-        [InlineKeyboardButton(text="Создать рассылку", callback_data="create_mailing")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")]
+        [InlineKeyboardButton(text="📢 Создать рассылку", callback_data="create_mailing")],
+        [InlineKeyboardButton(text="Выгрузить базу данных 💾", callback_data="export_database")],
+        [InlineKeyboardButton(text="Создать реф. ссылку 🔗", callback_data="create_referral_link")],
+        [InlineKeyboardButton(text="Статистика по ссылкам 📊", callback_data="referral_stats")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")],
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_referral_stats_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
+    buttons = []
+
+    if total_pages > 1:
+        prev_page = page - 1 if page > 1 else total_pages
+        next_page = page + 1 if page < total_pages else 1
+        buttons.append([
+            InlineKeyboardButton(text="⬅️", callback_data=f"ref_stats_page:{prev_page}"),
+            InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="..."),
+            InlineKeyboardButton(text="➡️", callback_data=f"ref_stats_page:{next_page}")
+        ])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="show_admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

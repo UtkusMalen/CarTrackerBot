@@ -5,3 +5,4 @@ class AdminFSM(StatesGroup):
     """FSM for admin commands."""
     get_message = State()
     confirm_mailing = State()
+    get_referral_code = State()

@@ -179,12 +179,12 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
     keyboard_buttons = [
         [InlineKeyboardButton(text="Мой авто🚘", callback_data="car_summary")],
         [
-            InlineKeyboardButton(text="Мой профиль", callback_data="my_profile"),
-            InlineKeyboardButton(text="Заметки", callback_data="notes")
+            InlineKeyboardButton(text="👤Мой профиль", callback_data="my_profile"),
+            InlineKeyboardButton(text="🗒️Заметки", callback_data="notes")
         ],
         [
             InlineKeyboardButton(text=get_text('my_expenses.menu_button'), callback_data="my_expenses"),
-            InlineKeyboardButton(text="Обновить пробег", callback_data="update_mileage"),
+            InlineKeyboardButton(text="🔄Обновить пробег", callback_data="update_mileage"),
         ],
         [
             InlineKeyboardButton(

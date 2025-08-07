@@ -38,12 +38,24 @@ async def command_start(message: Message, state: FSMContext, bot: Bot, command: 
     logger.info(f"User {user_id} ({username}) initiated /start. Referrer: {command.args}. New user: {is_new_user}")
 
     referrer_id = None
-    if command.args and command.args.isdigit():
-        ref_id = int(command.args)
-        if ref_id != user_id:
-            referrer_id = ref_id
+    promo_code = None
 
-    await User.create_user(user_id, username, first_name, referrer_id)
+    if command.args:
+        # Case 1: The argument is a numeric user ID
+        if command.args.isdigit():
+            ref_id = int(command.args)
+            # A user cannot refer themselves
+            if ref_id != user_id:
+                referrer_id = ref_id
+                logger.info(f"User {user_id} ({username}) initiated /start. Referrer user: {referrer_id}. New user: {is_new_user}")
+        # Case 2: The argument is a non-numeric promo code
+        else:
+            promo_code = command.args
+            logger.info(f"User {user_id} ({username}) initiated /start via promo code: '{promo_code}'. New user: {is_new_user}")
+    else:
+        logger.info(f"User {user_id} ({username}) initiated /start without a referrer. New user: {is_new_user}")
+
+    await User.create_user(user_id, username, first_name, referrer_id=referrer_id, referral_code=promo_code)
     await set_user_commands(bot, user_id)
 
     if is_new_user and referrer_id:

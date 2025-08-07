@@ -1,19 +1,18 @@
 from datetime import date, datetime, timedelta
 from sqlite3 import Row
-
-import aiosqlite
 from typing import Optional, Tuple, Set, Dict, Any, List
 
+import aiosqlite
 from loguru import logger
 
 
 class User:
     @staticmethod
-    async def create_user(user_id: int, username: str, first_name: str, referrer_id: Optional[int] = None) -> None:
+    async def create_user(user_id: int, username: str, first_name: str, referrer_id: Optional[int] = None, referral_code: Optional[str] = None) -> None:
         async with aiosqlite.connect("bot_database.db") as db:
-            cursor =await db.execute(
-                "INSERT OR IGNORE INTO users (user_id, username, first_name, referrer_id) VALUES (?, ?, ?, ?)",
-                (user_id, username, first_name, referrer_id),
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO users (user_id, username, first_name, referrer_id, referral_code) VALUES (?, ?, ?, ?, ?)",
+                (user_id, username, first_name, referrer_id, referral_code),
             )
             await db.commit()
             if cursor.rowcount > 0:
@@ -145,6 +144,34 @@ class User:
             cursor = await db.execute("SELECT COUNT(user_id) FROM users WHERE referrer_id = ?", (user_id,))
             row = await cursor.fetchone()
             return row[0] if row else 0
+
+    @staticmethod
+    async def count_users_by_referral_code(code: str) -> int:
+        """Counts the number of users who registered with a specific referral code."""
+        logger.debug(f"Counting users for referral code: {code}")
+        async with aiosqlite.connect("bot_database.db") as db:
+            cursor = await db.execute("SELECT COUNT(user_id) FROM users WHERE referral_code = ?", (code,))
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    @staticmethod
+    async def get_all_referral_code_stats() -> list[tuple[str, int]]:
+        """
+        Fetches all unique referral codes and the count of users for each.
+        Returns a list of tuples, e.g., [('promo2025', 10), ('summer_deal', 5)].
+        """
+        logger.debug("Fetching stats for all referral codes.")
+        async with aiosqlite.connect("bot_database.db") as db:
+            query = """
+                SELECT referral_code, COUNT(user_id) as count
+                FROM users
+                WHERE referral_code IS NOT NULL
+                GROUP BY referral_code
+                ORDER BY count DESC
+            """
+            cursor = await db.execute(query)
+            rows = await cursor.fetchall()
+            return rows if rows else []
 
 class Car:
     @staticmethod
@@ -837,4 +864,52 @@ class FuelEntry:
         logger.info(f"Deleting fuel entry with ID: {entry_id}")
         async with aiosqlite.connect("bot_database.db") as db:
             await db.execute("DELETE FROM fuel_entries WHERE entry_id = ?", (entry_id,))
+            await db.commit()
+
+    @staticmethod
+    async def get_entry_by_id(entry_id: int) -> Optional[Row]:
+        """Fetches a single fuel entry by its ID."""
+        async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM fuel_entries WHERE entry_id = ?", (entry_id,))
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def get_previous_full_tank(car_id: int, current_date: str) -> Optional[Row]:
+        """Finds the most recent entry marked as is_full=True before a given date."""
+        async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT * FROM fuel_entries
+                WHERE car_id = ? AND is_full = 1 AND created_at < ?
+                ORDER BY created_at DESC, mileage DESC
+                LIMIT 1
+                """,
+                (car_id, current_date)
+            )
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def get_interim_fuel_sum(car_id: int, start_date: str, end_date: str) -> float:
+        """Sums the liters from all entries for a car between two dates."""
+        async with aiosqlite.connect("bot_database.db") as db:
+            cursor = await db.execute(
+                """
+                SELECT SUM(liters) FROM fuel_entries
+                WHERE car_id = ? AND created_at > ? AND created_at <= ?
+                """,
+                (car_id, start_date, end_date)
+            )
+            result = await cursor.fetchone()
+            return result[0] if result and result[0] is not None else 0.0
+
+    @staticmethod
+    async def update_consumption(entry_id: int, consumption: float):
+        """Updates the fuel_consumption field for a specific entry."""
+        async with aiosqlite.connect("bot_database.db") as db:
+            await db.execute(
+                "UPDATE fuel_entries SET fuel_consumption = ? WHERE entry_id = ?",
+                (consumption, entry_id)
+            )
             await db.commit()

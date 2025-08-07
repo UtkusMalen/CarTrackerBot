@@ -55,14 +55,14 @@ async def show_fuel_log(message: Message, user_id: int, page: int = 1, edit: boo
         summary = await FuelEntry.get_fuel_summary(car['car_id'])
         text_lines.extend([
             get_text('fuel_log.liters_header'),
-            get_text('fuel_log.liters_this_month', value=f"{summary['liters_this_month']:.2f}"),
-            get_text('fuel_log.liters_last_month', value=f"{summary['liters_last_month']:.2f}"),
-            get_text('fuel_log.liters_all_time', value=f"{summary['liters_all_time']:.2f}"),
+            get_text('fuel_log.liters_this_month', value=f"{summary['liters_this_month']:.2f} л."),
+            get_text('fuel_log.liters_last_month', value=f"{summary['liters_last_month']:.2f} л."),
+            get_text('fuel_log.liters_all_time', value=f"{summary['liters_all_time']:.2f} л."),
             "",
             get_text('fuel_log.sum_header'),
-            get_text('fuel_log.sum_this_month', value=f"{summary['sum_this_month']:.2f}"),
-            get_text('fuel_log.sum_last_month', value=f"{summary['sum_last_month']:.2f}"),
-            get_text('fuel_log.sum_all_time', value=f"{summary['sum_all_time']:.2f}"),
+            get_text('fuel_log.sum_this_month', value=f"{summary['sum_this_month']:.2f} ₽"),
+            get_text('fuel_log.sum_last_month', value=f"{summary['sum_last_month']:.2f} ₽"),
+            get_text('fuel_log.sum_all_time', value=f"{summary['sum_all_time']:.2f} ₽"),
             "─" * 20
         ])
 
@@ -110,7 +110,7 @@ async def finish_fuel_entry(user_id: int, state: FSMContext, bot: Bot, callback_
     if not car or not data.get("mileage") or not data.get("liters"):
         return
 
-    await FuelEntry.add_entry(
+    new_entry_id = await FuelEntry.add_entry(
         car_id=car['car_id'],
         mileage=data["mileage"],
         liters=data["liters"],
@@ -119,21 +119,34 @@ async def finish_fuel_entry(user_id: int, state: FSMContext, bot: Bot, callback_
         date=data.get("date_sql", datetime.now().strftime('%Y-%m-%d'))
     )
 
+    new_entry = await FuelEntry.get_entry_by_id(new_entry_id)
+    if new_entry and new_entry['is_full']:
+        previous_full_tank = await FuelEntry.get_previous_full_tank(car['car_id'], new_entry['created_at'])
+        if previous_full_tank:
+            distance = new_entry['mileage'] - previous_full_tank['mileage']
+            if distance > 0:
+                # Sum all liters added AFTER the previous full tank up to and including this one
+                liters_sum = await FuelEntry.get_interim_fuel_sum(
+                    car['car_id'],
+                    previous_full_tank['created_at'],
+                    new_entry['created_at']
+                )
+                if liters_sum > 0:
+                    consumption = (liters_sum / distance) * 100
+                    await FuelEntry.update_consumption(new_entry_id, consumption)
+                    logger.info(f"Calculated accurate fuel consumption: {consumption:.2f} L/100km for entry {new_entry_id}")
+
     # Conditionally update car's main mileage
     if car['mileage'] is None or data['mileage'] > car['mileage']:
         await Car.update_mileage(car['car_id'], data['mileage'])
 
     total_sum = data.get("total_sum")
-    if total_sum:
-        text = get_text('fuel_tracking.success_message', total_sum=total_sum)
-    else:
-        text = get_text('fuel_tracking.success_message_no_sum', liters=data.get("liters"))
+    text = get_text('fuel_tracking.success_message', total_sum=total_sum) if total_sum else get_text('fuel_tracking.success_message_no_sum', liters=data.get("liters"))
 
     if callback_query_id:
         await bot.answer_callback_query(callback_query_id, text=text, show_alert=False)
         return None
     else:
-        # Fallback to a temporary message for text-based entries
         return await bot.send_message(user_id, text)
 
 
@@ -151,10 +164,12 @@ async def start_fuel_tracking(callback: CallbackQuery, state: FSMContext):
     # Check if tank volume is set
     if not car['tank_volume']:
         await state.set_state(FuelFSM.get_tank_volume)
-        await callback.message.edit_text(
+        msg = await callback.message.edit_text(
             get_text('fuel_tracking.prompt_tank_volume'),
             reply_markup=get_back_keyboard("main_menu")  # Assuming a simple back keyboard
         )
+        await state.update_data(prompt_message_id=msg.message_id)
+        await callback.answer()
         return
 
     # Proceed to main entry menu
@@ -249,22 +264,12 @@ async def process_fast_fuel_entry(message: Message, state: FSMContext, bot: Bot)
 async def fuel_menu_callback_router(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Routes all callbacks starting with 'fuel:'."""
     action = callback.data.split(":")[1]
-    user_id = callback.from_user.id
 
     if action == "toggle_full":
         data = await state.get_data()
         new_is_full_state = not data.get("is_full", False)
 
-        update_payload = {"is_full": new_is_full_state}
-
-        if new_is_full_state:
-            car = await Car.get_active_car(user_id)
-            if car and car['tank_volume']:
-                update_payload["liters"] = car['tank_volume']
-        else:
-            update_payload["liters"] = None
-
-        await state.update_data(**update_payload)
+        await state.update_data(is_full=new_is_full_state)
         await show_fuel_entry_menu(callback.message, state, edit=True)
 
     elif action == "edit":

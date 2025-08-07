@@ -1,21 +1,29 @@
 import asyncio
+import math
+import os
+import re
+
 from loguru import logger
 from aiogram import Router, Bot, F
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from bot.config import config
 from bot.fsm.admin import AdminFSM
 from bot.database.models import User, Car, Transaction, Reminder
-from bot.keyboards.inline import get_admin_panel_keyboard, get_mailing_confirmation_keyboard
+from bot.keyboards.inline import get_admin_panel_keyboard, get_mailing_confirmation_keyboard, get_back_keyboard, \
+    get_referral_stats_keyboard
+from bot.utils.db_exporter import create_db_dump_zip
 from bot.utils.notifications import send_mileage_reminder, send_time_based_notification
 from bot.utils.text_manager import get_text
 
 router = Router()
 router.message.filter(F.from_user.id.in_(config.admin_ids))
 router.callback_query.filter(F.from_user.id.in_(config.admin_ids))
+
+REF_STATS_PAGE_SIZE = 10
 
 @router.message(Command("admin"))
 async def show_admin_panel(message: Message, state: FSMContext):
@@ -27,13 +35,23 @@ async def show_admin_panel(message: Message, state: FSMContext):
         reply_markup=get_admin_panel_keyboard()
     )
 
+@router.callback_query(F.data == "show_admin_panel")
+async def show_admin_panel_callback(callback: CallbackQuery, state: FSMContext):
+    """Callback to show the admin panel main menu from a button."""
+    await state.clear()
+    await callback.message.edit_text(
+        get_text("admin.panel_header"), # You can use your own text here
+        reply_markup=get_admin_panel_keyboard()
+    )
+    await callback.answer()
+
 
 @router.callback_query(F.data == "create_mailing")
 async def start_mailing(callback: CallbackQuery, state: FSMContext):
     """Starts the process of creating a new broadcast message."""
     logger.info(f"Admin {callback.from_user.id} initiated a new mailing.")
     await state.set_state(AdminFSM.get_message)
-    msg = await callback.message.edit_text(get_text("admin.mailing_prompt"))
+    msg = await callback.message.edit_text(get_text("admin.mailing_prompt"), reply_markup=get_back_keyboard("show_admin_panel"))
     await state.update_data(prompt_message_id=msg.message_id)
     await callback.answer()
 
@@ -239,3 +257,154 @@ async def test_time_based_notification_command(message: Message, bot: Bot):
     if not success:
         logger.error(f"Failed to send test time-based notification to admin {admin_id}.")
         await message.reply("Произошла ошибка при отправке тестового уведомления.")
+
+@router.callback_query(F.data == "export_database", F.from_user.id.in_(config.admin_ids))
+async def export_database(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    admin_id = callback.from_user.id
+    logger.info(f"Admin {admin_id} initiated database export.")
+
+    await callback.answer("Начинаю экспорт...")
+    await callback.bot.send_message(admin_id, "⏳ Начинаю экспорт базы данных... Это может занять некоторое время.")
+
+    zip_file_path = None
+    try:
+        zip_file_path = await create_db_dump_zip()
+
+        if zip_file_path and os.path.exists(zip_file_path):
+            logger.success(f"Database export successful. Sending {zip_file_path} to admin {admin_id}.")
+            document = FSInputFile(zip_file_path)
+            await bot.send_document(admin_id, document, caption="✅ Экспорт завершен. Ваш архив с базой данных.")
+        else:
+            logger.error("Database export failed, zip file not created.")
+            await bot.send_message(admin_id, "❌ Произошла ошибка во время экспорта базы данных.")
+
+    except Exception as e:
+        logger.error(f"An error occurred during database export for admin {admin_id}: {e}", exc_info=True)
+        await bot.send_message(admin_id, "❌ Произошла критическая ошибка во время экспорта.")
+    finally:
+        if zip_file_path and os.path.exists(zip_file_path):
+            try:
+                os.remove(zip_file_path)
+                logger.info(f"Cleaned up zip file: {zip_file_path}")
+            except OSError as e:
+                logger.error(f"Error removing zip file {zip_file_path}: {e}")
+
+        await show_admin_panel(callback.message, state)
+
+
+@router.callback_query(F.data == "create_referral_link", F.from_user.id.in_(config.admin_ids))
+async def start_referral_link_creation(callback: CallbackQuery, state: FSMContext):
+    logger.info(f"Admin {callback.from_user.id} initiated custom referral link creation.")
+    await state.set_state(AdminFSM.get_referral_code)
+
+    prompt_text = (
+        "Введите уникальный код для реферальной ссылки (например, <code>promo2025</code> или <code>new_campaign</code>).\n\n"
+        "Используйте только латинские буквы, цифры и символ подчеркивания `_`."
+    )
+
+    msg = await callback.message.edit_text(
+        text=prompt_text,
+        reply_markup=get_back_keyboard("show_admin_panel")
+    )
+    await state.update_data(prompt_message_id=msg.message_id)
+    await callback.answer()
+
+@router.message(AdminFSM.get_referral_code)
+async def process_referral_code(message: Message, state: FSMContext, bot: Bot):
+    admin_id = message.from_user.id
+    code = message.text.strip()
+
+    if not re.match(r'^[a-zA-Z0-9_]+$', code):
+        logger.warning(f"Admin {admin_id} entered invalid referral code: '{code}'")
+        error_msg = await message.answer(
+            "❌ Неверный формат кода. Используйте только латинские буквы (a-z, A-Z), цифры (0-9) и символ подчеркивания (_)."
+        )
+        await message.delete()
+        await asyncio.sleep(5)
+        await error_msg.delete()
+        return
+
+    await message.delete()
+    data = await state.get_data()
+    prompt_message_id = data.get("prompt_message_id")
+    await state.clear()
+
+    bot_info = await bot.get_me()
+    ref_link = f"https://t.me/{bot_info.username}?start={code}"
+
+    logger.success(f"Admin {admin_id} created custom referral link with code: {code}")
+
+    response_text = (
+        f"✅ Ваша кастомная реферальная ссылка успешно создана:\n\n"
+        f"{ref_link}\n\n"
+        f"Нажмите на ссылку, чтобы скопировать ее. Когда новый пользователь перейдет по этой ссылке, он будет зарегистрирован "
+        f"без начисления вознаграждения кому-либо (используется для отслеживания кампаний)."
+    )
+
+    try:
+        await bot.edit_message_text(
+            chat_id=admin_id,
+            message_id=prompt_message_id,
+            text=response_text,
+            reply_markup=get_back_keyboard("show_admin_panel")
+        )
+    except TelegramBadRequest:
+        await bot.send_message(
+            chat_id=admin_id,
+            text=response_text,
+            reply_markup=get_back_keyboard("show_admin_panel")
+        )
+
+@router.callback_query(F.data == "referral_stats")
+async def show_referral_stats(callback: CallbackQuery):
+    """Shows the first page of the referral code statistics."""
+    await _display_referral_stats_page(callback, page=1)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ref_stats_page:"))
+async def paginate_referral_stats(callback: CallbackQuery):
+    """Handles pagination for the referral statistics view."""
+    try:
+        page = int(callback.data.split(":")[1])
+        await _display_referral_stats_page(callback, page)
+    except (ValueError, IndexError):
+        logger.warning(f"Invalid pagination callback received: {callback.data}")
+    finally:
+        await callback.answer()
+
+
+async def _display_referral_stats_page(callback: CallbackQuery, page: int):
+    """
+    A helper function to display a specific page of the referral stats.
+    """
+    logger.info(f"Admin {callback.from_user.id} is viewing referral stats page {page}.")
+
+    all_stats = await User.get_all_referral_code_stats()
+
+    if not all_stats:
+        text = "<b>Статистика по реферальным кодам</b>\n\nПользователи еще не регистрировались по кастомным ссылкам."
+        keyboard = get_back_keyboard("show_admin_panel")
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        return
+
+    # Pagination logic
+    total_pages = math.ceil(len(all_stats) / REF_STATS_PAGE_SIZE)
+    page = max(1, min(page, total_pages))
+    start_index = (page - 1) * REF_STATS_PAGE_SIZE
+    end_index = start_index + REF_STATS_PAGE_SIZE
+
+    page_stats = all_stats[start_index:end_index]
+
+    # Format the text
+    header = "<b>Статистика по реферальным кодам:</b>"
+
+    stats_lines = []
+    for code, count in page_stats:
+        stats_lines.append(f"▫️ <code>{code}</code>: <b>{count}</b> чел.")
+
+    page_footer = f"\n\nСтраница {page}/{total_pages}"
+    full_text = f"{header}\n\n" + "\n".join(stats_lines) + page_footer
+
+    keyboard = get_referral_stats_keyboard(page, total_pages)
+    await callback.message.edit_text(text=full_text, reply_markup=keyboard)

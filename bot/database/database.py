@@ -13,7 +13,8 @@ class DatabaseManager:
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT,
             balance_nuts INTEGER DEFAULT 0, active_car_id INTEGER,
-            mileage_reminder_period INTEGER DEFAULT 1, referrer_id INTEGER
+            mileage_reminder_period INTEGER DEFAULT 1, referrer_id INTEGER,
+            referral_code TEXT
         );
         """,
         """
@@ -210,6 +211,11 @@ class DatabaseManager:
         if 'tank_volume' not in cars_cols:
             logger.info("Migration: Adding column 'tank_volume' to 'cars'.")
             await db.execute("ALTER TABLE cars ADD COLUMN tank_volume REAL")
+
+        user_cols = await self._get_table_columns(db, 'users')
+        if 'referral_code' not in user_cols:
+            logger.info("Migration: Adding column 'referral_code' to 'users'.")
+            await db.execute("ALTER TABLE users ADD COLUMN referral_code TEXT")
 
     async def _migrate_insurance_data(self, db: aiosqlite.Connection):
         """Migrates legacy insurance data from the 'cars' table to the 'reminders' table."""
