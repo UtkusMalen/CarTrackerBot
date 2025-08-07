@@ -204,6 +204,14 @@ class DatabaseManager:
 
         # Add 'insurance_migrated' flag to 'cars' table
         cars_cols = await self._get_table_columns(db, 'cars')
+        if 'insurance_start_date' not in cars_cols:
+            logger.info("Migration: Adding column 'insurance_start_date' to 'cars'.")
+            await db.execute("ALTER TABLE cars ADD COLUMN insurance_start_date DATE")
+
+        if 'insurance_duration_days' not in cars_cols:
+            logger.info("Migration: Adding column 'insurance_duration_days' to 'cars'.")
+            await db.execute("ALTER TABLE cars ADD COLUMN insurance_duration_days INTEGER")
+
         if 'insurance_migrated' not in cars_cols:
             logger.info("Migration: Adding column 'insurance_migrated' to 'cars'.")
             await db.execute("ALTER TABLE cars ADD COLUMN insurance_migrated BOOLEAN DEFAULT FALSE")
