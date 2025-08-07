@@ -296,6 +296,7 @@ reminders:
     edit_header: | 
       Меню редактирования отслеживания:
       "<b>{name}</b>"
+    prompt_edit_interval_km: "Введите новый интервал пробега:"
   manage_exact_mileage:
     target_line: "Целевой пробег: {value} км"
     remaining_line: "Осталось до цели: {value} км"
@@ -394,6 +395,28 @@ reminders_flow:
   # Toggles & Actions
   repeat_on: "✅ Автопродление включено"
   repeat_off: "❌ Автопродление выключено"
+
+expense:
+  add_button: "+ Расход"
+  prompt_category: |
+    <b>Укажите категорию расходов.</b>
+
+    Или отправьте информацию одним сообщением в формате:
+    <code>Категория Сумма Пробег Описание</code>
+    <b>Например:</b> <code>Сервис 5000 98000 Замена свечей</code>
+  create_category_button: "+ Создать категорию"
+  prompt_amount: "Укажите потраченную сумму (например: 5000)"
+  prompt_mileage: "На каком пробеге была потрачена сумма?\nВыберите текущий или введите свой вариант."
+  prompt_description: "Добавьте подпись к расходу (необязательно)."
+  prompt_date: "Укажите дату расхода.\nВыберите текущую или введите свою в формате ДД.ММ.ГГГГ."
+  prompt_create_category: "Введите название для новой категории:"
+  skip_button: "Пропустить"
+  use_current_mileage_button: "Текущий пробег: {mileage}"
+  use_current_date_button: "Текущая дата: {date}"
+  success: "✅ Расход '{description}' на сумму {amount} успешно добавлен!"
+  success_no_desc: "✅ Расход на сумму {amount} успешно добавлен!"
+  category_exists: "Категория с таким названием уже существует."
+  invalid_fast_format: "Неверный формат. Попробуйте еще раз: <code>Категория Сумма Пробег Описание</code>"
 
 admin:
   panel_header: "<b>Панель администратора</b>"

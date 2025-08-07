@@ -562,3 +562,61 @@ class Transaction:
                 (user_id, limit)
             )
             return await cursor.fetchall()
+
+class ExpenseCategory:
+    @staticmethod
+    async def get_categories_for_user(user_id: int) -> List[Row]:
+        """Fetches default and user-specific categories, ordered."""
+        async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT category_id, name FROM expense_categories
+                WHERE is_default = TRUE OR user_id = ?
+                ORDER BY is_default DESC, name ASC
+                """,
+                (user_id,)
+            )
+            return await cursor.fetchall()
+
+    @staticmethod
+    async def add_category(user_id: int, name: str) -> int:
+        """Adds a new custom category for a user."""
+        async with aiosqlite.connect("bot_database.db") as db:
+            cursor = await db.execute(
+                "INSERT INTO expense_categories (user_id, name) VALUES (?, ?)",
+                (user_id, name)
+            )
+            await db.commit()
+            return cursor.lastrowid
+
+    @staticmethod
+    async def find_category_by_name(user_id: int, name: str) -> Optional[Row]:
+        """Finds a category by name, checking user-specific then defaults."""
+        async with aiosqlite.connect("bot_database.db") as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT category_id FROM expense_categories
+                WHERE (user_id = ? AND name = ?) OR (is_default = TRUE AND name = ?)
+                ORDER BY user_id DESC
+                LIMIT 1
+                """,
+                (user_id, name, name)
+            )
+            return await cursor.fetchone()
+
+class Expense:
+    @staticmethod
+    async def add_expense(car_id: int, category_id: int, amount: float, mileage: Optional[int], description: Optional[str], date: str) -> None:
+        """Adds a new expense record."""
+        logger.info(f"Adding expense for car {car_id}: amount={amount}, category={category_id}")
+        async with aiosqlite.connect("bot_database.db") as db:
+            await db.execute(
+                """
+                INSERT INTO expenses (car_id, category_id, amount, mileage, description, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (car_id, category_id, amount, mileage, description, date)
+            )
+            await db.commit()

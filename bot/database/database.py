@@ -54,6 +54,27 @@ class DatabaseManager:
             description TEXT, created_at DATETIME DEFAULT (datetime('now', 'localtime')),
             FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
         );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS expense_categories (
+            category_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            name TEXT NOT NULL UNIQUE,
+            is_default BOOLEAN DEFAULT FALSE
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS expenses (
+            expense_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            car_id INTEGER NOT NULL,
+            category_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            mileage INTEGER,
+            description TEXT,
+            created_at DATE DEFAULT (date('now')),
+            FOREIGN KEY (car_id) REFERENCES cars (car_id) ON DELETE CASCADE,
+            FOREIGN KEY (category_id) REFERENCES expense_categories (category_id)
+        );
         """
     ]
 
@@ -79,6 +100,9 @@ class DatabaseManager:
 
             # 4. Perform data migrations (moving data between tables).
             await self._migrate_insurance_data(db)
+
+            # 5. Populate default data
+            await self._create_default_expense_categories(db)
 
             await db.commit()
         logger.success("Database initialization and migration checks complete.")
@@ -218,6 +242,16 @@ class DatabaseManager:
 
             await db.execute("UPDATE cars SET insurance_migrated = TRUE WHERE car_id = ?", (car_id,))
         logger.success("Migration: Insurance data migration complete.")
+
+    async def _create_default_expense_categories(self, db: aiosqlite.Connection):
+        logger.info("Checking for default expense categories...")
+        defaults = ["ТО", "Сервис", "Запчасти", "Аксессуары", "Мойка", "Страховка", "Парковка", "Тюнинг", "Штрафы"]
+        for category_name in defaults:
+            await db.execute(
+                "INSERT OR IGNORE INTO expense_categories (name, is_default) VALUES (?, TRUE)",
+                (category_name,)
+            )
+        logger.info("Default expense categories created.")
 
 
 async def init_db():

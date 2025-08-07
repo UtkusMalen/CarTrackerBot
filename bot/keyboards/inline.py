@@ -438,6 +438,53 @@ def get_summary_keyboard() -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_expense_category_keyboard(categories: List[Row]) -> InlineKeyboardMarkup:
+    """Creates a keyboard with expense categories."""
+    buttons = []
+    # Create a 3-column layout
+    for i in range(0, len(categories), 3):
+        row = []
+        for j in range(3):
+            if i + j < len(categories):
+                cat = categories[i+j]
+                row.append(
+                    InlineKeyboardButton(text=cat['name'], callback_data=f"set_exp_cat:{cat['category_id']}:{cat['name']}")
+                )
+        buttons.append(row)
+
+    buttons.append([InlineKeyboardButton(text=get_text('expense.create_category_button'), callback_data="create_exp_cat")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_expense_skip_keyboard(back_callback: str) -> InlineKeyboardMarkup:
+    """Returns a keyboard with a Skip and Back button."""
+    buttons = [
+        [InlineKeyboardButton(text=get_text('expense.skip_button'), callback_data="skip_expense_step")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_expense_mileage_keyboard(current_mileage: int) -> InlineKeyboardMarkup:
+    """Returns a keyboard for the mileage step in expense tracking."""
+    buttons = [
+        [InlineKeyboardButton(text=get_text('expense.use_current_mileage_button', mileage=current_mileage), callback_data=f"use_current_exp_mileage:{current_mileage}")],
+        [InlineKeyboardButton(text=get_text('expense.skip_button'), callback_data="skip_expense_step")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="add_expense")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_expense_date_keyboard() -> InlineKeyboardMarkup:
+    """Returns a keyboard for the date step in expense tracking."""
+    current_date_str = datetime.now().strftime('%d.%m.%Y')
+    current_date_sql = datetime.now().strftime('%Y-%m-%d')
+    buttons = [
+        [InlineKeyboardButton(text=get_text('expense.use_current_date_button', date=current_date_str), callback_data=f"use_current_exp_date:{current_date_sql}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="add_expense")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 def get_detailed_rating_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
     """Returns the pagination keyboard for the detailed rating view."""

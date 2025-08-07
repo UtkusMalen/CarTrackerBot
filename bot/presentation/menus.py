@@ -190,6 +190,9 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
                 callback_data="manage_trackings"
             )
         ],
+        [
+            InlineKeyboardButton(text=get_text('expense.add_button'), callback_data="add_expense")
+        ],
     ]
 
     # --- Dynamically add restart buttons ---
