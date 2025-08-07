@@ -20,7 +20,7 @@ class DatabaseManager:
         CREATE TABLE IF NOT EXISTS cars (
             car_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT, mileage INTEGER,
             last_mileage_update_at DATE DEFAULT (date('now')), make TEXT, model TEXT, year INTEGER,
-            engine_model TEXT, engine_volume REAL, fuel_type TEXT, power TEXT, transmission TEXT,
+            engine_model TEXT, engine_volume REAL, tank_volume REAL, fuel_type TEXT, power TEXT, transmission TEXT,
             drive_type TEXT, body_type TEXT, mileage_allowance INTEGER DEFAULT 1000,
             last_allowance_update_at DATE DEFAULT (date('now')),
             insurance_start_date DATE, insurance_duration_days INTEGER,
@@ -159,11 +159,20 @@ class DatabaseManager:
         # Set a default type for old reminders to prevent issues
         await db.execute("UPDATE reminders SET type = 'mileage' WHERE type IS NULL")
 
+        notes_cols = await self._get_table_columns(db, 'notes')
+        if 'is_pinned' not in notes_cols:
+            logger.info("Migration: Adding column 'is_pinned' to 'notes'.")
+            await db.execute("ALTER TABLE notes ADD COLUMN is_pinned BOOLEAN DEFAULT FALSE")
+
         # Add 'insurance_migrated' flag to 'cars' table
         cars_cols = await self._get_table_columns(db, 'cars')
         if 'insurance_migrated' not in cars_cols:
             logger.info("Migration: Adding column 'insurance_migrated' to 'cars'.")
             await db.execute("ALTER TABLE cars ADD COLUMN insurance_migrated BOOLEAN DEFAULT FALSE")
+
+        if 'tank_volume' not in cars_cols:
+            logger.info("Migration: Adding column 'tank_volume' to 'cars'.")
+            await db.execute("ALTER TABLE cars ADD COLUMN tank_volume REAL")
 
     async def _migrate_insurance_data(self, db: aiosqlite.Connection):
         """Migrates legacy insurance data from the 'cars' table to the 'reminders' table."""

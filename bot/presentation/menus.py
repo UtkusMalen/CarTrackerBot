@@ -122,7 +122,7 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
 
                 if end_date:
                     remaining_days = (end_date - datetime.now().date()).days
-                    if remaining_days <= 0 and not rem.get('is_repeating', False):
+                    if remaining_days <= 0 and not rem['is_repeating']:
                         expired_reminders_for_restart.append(rem)  # <-- Add expired, non-repeating time reminder
 
                 # The rest of the display logic remains the same
@@ -178,17 +178,18 @@ async def _get_main_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarku
 
     # --- Build Keyboard ---
     keyboard_buttons = [
+        [InlineKeyboardButton(text="Мой авто🚘", callback_data="car_summary")],
         [
             InlineKeyboardButton(text="Мой профиль", callback_data="my_profile"),
-            InlineKeyboardButton(text="Обновить пробег", callback_data="update_mileage"),
+            InlineKeyboardButton(text="Заметки", callback_data="notes")
         ],
+        [InlineKeyboardButton(text="Обновить пробег", callback_data="update_mileage")],
         [
             InlineKeyboardButton(
                 text=get_text('main_menu.trackings_button', count=len(reminders)),
                 callback_data="manage_trackings"
             )
         ],
-        [InlineKeyboardButton(text="Заметки", callback_data="notes")],
     ]
 
     # --- Dynamically add restart buttons ---

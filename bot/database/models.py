@@ -314,7 +314,7 @@ class Note:
         offset = (page - 1) * page_size
         logger.debug(f"Fetching notes for car_id {car_id}, page {page} (offset {offset}, size {page_size})")
         async with aiosqlite.connect("bot_database.db") as db:
-            cursor = await db.execute("SELECT note_id, text, created_at FROM notes WHERE car_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?", (car_id, page_size, offset))
+            cursor = await db.execute("SELECT note_id, text, created_at, is_pinned FROM notes WHERE car_id = ? ORDER BY is_pinned DESC, created_at DESC LIMIT ? OFFSET ?", (car_id, page_size, offset))
             return await cursor.fetchall()
 
     @staticmethod
@@ -330,6 +330,16 @@ class Note:
         logger.info(f"Deleting note with note_id {note_id}")
         async with aiosqlite.connect("bot_database.db") as db:
             await db.execute("DELETE FROM notes WHERE note_id = ?", (note_id,))
+            await db.commit()
+
+    @staticmethod
+    async def toggle_pin_note(note_id: int) -> None:
+        logger.info(f"Toggling pin status for note with note_id {note_id}")
+        async with aiosqlite.connect("bot_database.db") as db:
+            await db.execute(
+                "UPDATE notes SET is_pinned = NOT is_pinned WHERE note_id = ?",
+                (note_id,)
+            )
             await db.commit()
 
 class Reminder:

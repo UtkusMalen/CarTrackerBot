@@ -8,7 +8,8 @@ from loguru import logger
 
 from bot.database.models import Car, Note
 from bot.fsm.notes import NotesFSM
-from bot.keyboards.inline import get_notes_keyboard, get_delete_notes_keyboard, get_back_keyboard
+from bot.keyboards.inline import get_notes_keyboard, get_delete_notes_keyboard, get_back_keyboard, \
+    get_pin_notes_keyboard
 from bot.utils.text_manager import get_text
 
 router = Router()
@@ -19,7 +20,13 @@ async def format_notes_text(notes: list, car_name: str, page: int, total_pages: 
     if not notes:
         return f"{header}\n\n{get_text('notes.no_notes')}"
 
-    notes_list = [get_text('notes.note_line', date=date.replace('-', '.'), text=text) for _, text, date in notes]
+    notes_list = []
+
+    for _, text, date, is_pinned in notes:
+        pin_emoji = "📌" if is_pinned else ""
+        note_line = get_text('notes.note_line', date=date.replace('-', '.'), text=text)
+        notes_list.append(f"{pin_emoji} {note_line}")
+
     notes_section = "\n\n".join(notes_list)
     page_footer = f"\n\nСтраница {page} из {total_pages}" if total_pages > 1 else ""
 
@@ -163,3 +170,34 @@ async def delete_note_process(callback: CallbackQuery):
 
     await show_notes(callback.message, user_id, page=current_page)
     await callback.answer(get_text('notes.note_deleted'), show_alert=True)
+
+@router.callback_query(F.data.startswith("pin_note_start:"))
+async def pin_note_start(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    current_page = int(callback.data.split(":")[1])
+    logger.info(f"User {user_id} started pinning a note from page {current_page}.")
+    car = await Car.get_active_car(user_id)
+
+    notes_on_page = await Note.get_notes_for_car_paginated(car[0], page=current_page, page_size=NOTES_PER_PAGE)
+
+    if not notes_on_page:
+        await callback.answer(get_text('notes.no_notes_to_pin'), show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        get_text('notes.pin_prompt'),
+        reply_markup=get_pin_notes_keyboard(notes_on_page, page=current_page)
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("pin_note_confirm:"))
+async def pin_note_process(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    _, note_id, current_page = callback.data.split(":")
+    note_id, current_page = int(note_id), int(current_page)
+
+    logger.info(f"User {user_id} confirmed to pin note {note_id}.")
+    await Note.toggle_pin_note(note_id)
+
+    await show_notes(callback.message, user_id, page=current_page)
+    await callback.answer(get_text('notes.note_pin_toggled'), show_alert=True)

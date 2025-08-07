@@ -130,7 +130,10 @@ def get_notes_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
     """Returns the keyboard for the notes menu with pagination."""
     buttons = [
         [InlineKeyboardButton(text="Добавить запись", callback_data="add_note")],
-        [InlineKeyboardButton(text="Удалить запись", callback_data=f"delete_note_start:{page}")],
+        [
+            InlineKeyboardButton(text="Удалить запись", callback_data=f"delete_note_start:{page}"),
+            InlineKeyboardButton(text="📌 Закрепить/Открепить", callback_data=f"pin_note_start:{page}")
+        ],
     ]
 
     pagination_buttons = []
@@ -153,11 +156,24 @@ def get_notes_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
 def get_delete_notes_keyboard(notes: List[Tuple], page: int) -> InlineKeyboardMarkup:
     """Returns a keyboard to select which note to delete."""
     buttons = []
-    for note_id, text, date in notes:
+    for note_id, text, date, _ in notes:
         display_text = (text[:25] + '...') if len(text) > 25 else text
         buttons.append([InlineKeyboardButton(
             text=f"❌ {date}: {display_text}",
             callback_data=f"delete_note_confirm:{note_id}:{page}"
+        )])
+    buttons.append([InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"show_notes_page:{page}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_pin_notes_keyboard(notes: List[Tuple], page: int) -> InlineKeyboardMarkup:
+    """Returns a keyboard to select which note to pin/unpin."""
+    buttons = []
+    for note_id, text, date, is_pinned in notes:
+        display_text = (text[:25] + "...") if len(text) > 25 else text
+        pin_emoji = "📌" if is_pinned else "📎"
+        buttons.append([InlineKeyboardButton(
+            text=f"{pin_emoji} {date}: {display_text}",
+            callback_data=f"pin_note_confirm:{note_id}:{page}"
         )])
     buttons.append([InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"show_notes_page:{page}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -365,20 +381,61 @@ def get_to_main_menu_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text="В главное меню", callback_data="main_menu")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_options_keyboard(field_key: str, options: List[str]) -> InlineKeyboardMarkup:
+    """Creates a keyboard with pre-defined options for a summary field."""
+    buttons = []
+    for i in range(0, len(options), 2):
+        row = [
+            InlineKeyboardButton (
+                text=options[i],
+                callback_data=f"set_summary_option:{field_key}:{options[i]}"
+            )
+        ]
+        if i + 1 < len(options):
+            row.append(
+                InlineKeyboardButton(
+                    text=options[i + 1],
+                    callback_data=f"set_summary_option:{field_key}:{options[i + 1]}"
+                )
+            )
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="car_summary")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 def get_summary_keyboard() -> InlineKeyboardMarkup:
-    """Returns the keyboard for the car summary menu"""
+    """Returns the keyboard for the car summary menu with a two-column layout."""
     buttons = []
-
     field_labels = get_text('summary.field_labels')
 
-    for field_key, field_label in field_labels.items():
-        buttons.append([InlineKeyboardButton(
-            text=field_label,
-            callback_data=f"edit_summary:{field_key}"
-        )])
+    # Convert dictionary items to a list to allow iteration by index
+    field_items = list(field_labels.items())
 
+    # Iterate through the items, taking two at a time to create rows
+    for i in range(0, len(field_items), 2):
+        # Start a new row with the first button
+        row = [
+            InlineKeyboardButton(
+                text=field_items[i][1],  # The label (e.g., "Марка")
+                callback_data=f"edit_summary:{field_items[i][0]}"  # The key (e.g., "make")
+            )
+        ]
+
+        # If there's a second item for this row, add it to the same row
+        if i + 1 < len(field_items):
+            row.append(
+                InlineKeyboardButton(
+                    text=field_items[i + 1][1],  # The label for the second button
+                    callback_data=f"edit_summary:{field_items[i + 1][0]}"  # The key for the second button
+                )
+            )
+
+        # Add the completed row (with one or two buttons) to the keyboard
+        buttons.append(row)
+
+    # Add the 'Back' button on its own row at the end
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")])
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
